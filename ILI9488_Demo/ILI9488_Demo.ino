@@ -26,21 +26,22 @@ unsigned long stateTime = 0;
 const unsigned long stateDuration = 30000; // 每个测试状态持续30秒
 
 // 定义颜色通道修正函数，用于解决特定的颜色映射问题
-// 基于反馈：红色变蓝色，绿色变黄色，蓝色变粉红色
-uint16_t fixColor(uint16_t color) {
-  // 提取RGB分量
-  uint8_t r = (color >> 11) & 0x1F;  // 红色通道 (5位)
-  uint8_t g = (color >> 5) & 0x3F;   // 绿色通道 (6位)
-  uint8_t b = color & 0x1F;          // 蓝色通道 (5位)
+// 适配RGB666模式的颜色修正 - 现在配合MADCTL_BGR设置
+uint32_t fixColor(uint32_t color) {
+  // 在RGB666模式下，由于我们在驱动中设置了MADCTL_BGR，
+  // 这里需要保持RGB顺序，因为控制器会根据MADCTL自动调整内部映射
+  // 提取RGB分量 (每个通道6位)
+  uint8_t r = (color >> 16) & 0xFC;  // 红色通道 (6位，R5-R0)
+  uint8_t g = (color >> 8) & 0xFC;   // 绿色通道 (6位，G5-G0)
+  uint8_t b = color & 0xFC;          // 蓝色通道 (6位，B5-B0)
   
-  // 直接交换红色和蓝色通道
-  // 对于ILI9488显示问题，这种简单的交换通常能解决大多数颜色映射错误
-  // 特别是当出现红→蓝，蓝→红类型的映射错误时
-  return ((b << 11) | (g << 5) | r);
+  // 保持原始RGB顺序，因为MADCTL_BGR会在控制器内部处理颜色通道交换
+  // 这样可以确保红色显示为红色，绿色显示为绿色，蓝色显示为蓝色
+  return ((r << 16) | (g << 8) | b);
 }
 
 // 颜色数组 - 使用修正后的颜色值
-uint16_t testColors[] = {fixColor(ILI9488_RED), fixColor(ILI9488_GREEN), fixColor(ILI9488_BLUE), 
+uint32_t testColors[] = {fixColor(ILI9488_RED), fixColor(ILI9488_GREEN), fixColor(ILI9488_BLUE), 
                          fixColor(ILI9488_YELLOW), fixColor(ILI9488_CYAN), fixColor(ILI9488_MAGENTA), 
                          fixColor(ILI9488_WHITE)};
 const char* colorNames[] = {"Red", "Green", "Blue", "Yellow", "Cyan", "Magenta", "White"};
@@ -71,63 +72,48 @@ void showIntro() {
 // 颜色测试 - 简化版，仅使用十六进制颜色代码测试红、绿、蓝
 // fixColor函数已在文件开头定义，请不要重复定义
 
-// 颜色测试 - 优化版，修正颜色映射并提高刷新性能
+// 颜色测试 - 18位RGB666优化版
 void runColorTest() {
   static uint8_t colorStep = 0;
   static unsigned long lastChange = 0;
   
   // 每3秒切换一次颜色
   if (millis() - lastChange > 3000) {
-    // 定义三种基本颜色的十六进制值（标准RGB565格式）
-    uint16_t redColor = 0xF800;   // #FF0000 红色
-    uint16_t greenColor = 0x07E0; // #00FF00 绿色
-    uint16_t blueColor = 0x001F;  // #0000FF 蓝色
+    // 测试不同颜色的显示 - 18位RGB666优化版
+    // 使用修正后的颜色值，确保正确的RGB666颜色表示
+    const uint32_t colors[] = {
+      fixColor(ILI9488_BLACK),
+      fixColor(ILI9488_RED),
+      fixColor(ILI9488_GREEN),
+      fixColor(ILI9488_BLUE),
+      fixColor(ILI9488_YELLOW),
+      fixColor(ILI9488_CYAN),
+      fixColor(ILI9488_MAGENTA),
+      fixColor(ILI9488_WHITE)
+    };
     
-    // 使用修正函数调整颜色值
-    redColor = fixColor(redColor);
-    greenColor = fixColor(greenColor);
-    blueColor = fixColor(blueColor);
+    const char* colorNames[] = {
+      "BLACK", "RED", "GREEN", "BLUE",
+      "YELLOW", "CYAN", "MAGENTA", "WHITE"
+    };
     
-    // 优化：创建一个临时缓冲区来存储文本颜色，避免重复修改前景色
-    uint16_t textColor;
-    
-    // 根据步骤设置颜色和显示对应的十六进制值
-    switch (colorStep) {
-      case 0: // 红色测试
-        tft.fillScreen(redColor);
-        textColor = fixColor(ILI9488_WHITE); // 使用修正后的白色文字
-        break;
-      
-      case 1: // 绿色测试
-        tft.fillScreen(greenColor);
-        textColor = fixColor(ILI9488_BLACK); // 使用修正后的黑色文字
-        break;
-      
-      case 2: // 蓝色测试
-        tft.fillScreen(blueColor);
-        textColor = fixColor(ILI9488_WHITE); // 使用修正后的白色文字
-        break;
-    }
-    
-    // 在填充屏幕后一次性设置文本属性并绘制文本
+    tft.fillScreen(colors[colorStep]);
     tft.setCursor(40, 200);
     tft.setFontSize(3);
-    tft.setForeground(textColor);
     
-    // 显示对应的颜色信息
-    if (colorStep == 0) {
-      tft.println("#FF0000 RED");
-      Serial.println("显示红色 (#FF0000)");
-    } else if (colorStep == 1) {
-      tft.println("#00FF00 GREEN");
-      Serial.println("显示绿色 (#00FF00)");
+    // 根据背景颜色选择合适的文本颜色
+    if (colorStep == 0 || colorStep == 7) {  // 黑色背景显示白色文字，白色背景显示黑色文字
+      tft.setForeground(colorStep == 0 ? fixColor(ILI9488_WHITE) : fixColor(ILI9488_BLACK));
     } else {
-      tft.println("#0000FF BLUE");
-      Serial.println("显示蓝色 (#0000FF)");
+      tft.setForeground(fixColor(ILI9488_BLACK));
     }
     
-    // 循环切换三种颜色
-    colorStep = (colorStep + 1) % 3;
+    tft.println(colorNames[colorStep]);
+    Serial.print("显示");
+    Serial.println(colorNames[colorStep]);
+    
+    // 循环切换所有8种颜色
+    colorStep = (colorStep + 1) % 8;
     lastChange = millis();
   }
 }
@@ -246,7 +232,6 @@ void nextTestState() {
       // 使用修正后的黑色
       tft.fillScreen(fixColor(ILI9488_BLACK));
       break;
- 
   }
 }
 
@@ -258,7 +243,7 @@ void setup() {
   tft.begin();
   
   // 设置旋转方向
-  tft.setRotation(1); // 横向显示 (480x320)
+  tft.setRotation(3); // 横向显示 (480x320)
   
   // 优化显示性能的关键配置
   // 1. 直接优化ILI9488控制器寄存器以提高从上到下的刷新速度
@@ -287,19 +272,19 @@ void loop() {
     nextTestState();
   }
   
-  // 运行当前测试
+  // 运行当前测试 - 完整的RGB666功能验证
   switch (currentState) {
     case TEST_INTRO:
       // 介绍页不需要持续更新
       break;
     case TEST_COLORS:
-      runColorTest();
+      runColorTest();    // 测试所有颜色显示，使用18位RGB666优化版
       break;
     case TEST_SHAPES:
-      runShapeTest();
+      runShapeTest();    // 测试形状绘制功能
       break;
     case TEST_TEXT:
-      runTextTest();
+      runTextTest();     // 测试文本显示功能
       break;
   }
   

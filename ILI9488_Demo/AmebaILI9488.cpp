@@ -3,9 +3,9 @@
 /* 构造函数 */
 AmebaILI9488::AmebaILI9488(uint8_t cs, uint8_t dc, uint8_t rst, uint8_t sck, uint8_t mosi, uint8_t led)
   : _cs(cs), _dc(dc), _rst(rst), _sck(sck), _mosi(mosi), _led(led), 
-    _madctl(0), _cursorX(0), _cursorY(0), _fontSize(1), 
+    _rotation(0), _cursorX(0), _cursorY(0), _fontSize(1), 
     _foreground(ILI9488_WHITE), _background(ILI9488_BLACK),
-    _width(320), _height(480) {}
+    _width(ILI9488_TFTWIDTH), _height(ILI9488_TFTHEIGHT) {}
 
 /* 初始化显示器 */
 void AmebaILI9488::begin(void) {
@@ -43,121 +43,239 @@ void AmebaILI9488::hardwareReset(void) {
   delay(120);
 }
 
-/* 初始化寄存器配置 */
+/* 初始化寄存器配置 - 18位RGB666模式优化 */
 void AmebaILI9488::initRegisters(void) {
-  writeCommand(CMD_SWRESET);   // 01h - 软件复位
+  // 软件复位
+  writeCommand(ILI9488_SWRESET);   // 01h - 软件复位
   delay(5);
 
-  writeCommand(CMD_SLPOUT);    // 11h - 退出睡眠模式
+  // 退出睡眠模式
+  writeCommand(ILI9488_SLPOUT);    // 11h - 退出睡眠模式
   delay(120);
-
-  writeCommand(CMD_COLMOD);    // 3Ah - 设置像素格式
-  writeData(0x66);             // 18-bit 6-6-6格式
-
-  writeCommand(CMD_MADCTL);    // 36h - 内存数据访问控制
-  writeData(0x48);             // RGB顺序，默认扫描方向
-
-  writeCommand(CMD_PWCTRL1);   // C0h - 电源控制1
-  writeData(0x0E);
-  writeData(0x0E);
-
-  writeCommand(CMD_PWCTRL2);   // C1h - 电源控制2
-  writeData(0x44);
-
-  writeCommand(CMD_VMCTRL1);   // C5h - VCOM控制
+  
+  // 帧率控制
+  writeCommand(ILI9488_FRMCTR1);
+  writeData(0xA0);  // 60Hz
+  
+  writeCommand(ILI9488_FRMCTR2);
   writeData(0x00);
-  writeData(0x40);
+  
+  writeCommand(ILI9488_FRMCTR3);
   writeData(0x00);
-  writeData(0x40);
-
-  /* 正伽马校正 */
-  writeCommand(CMD_PGAMCTRL);  // E0h
-  const uint8_t pgam[] = {
-    0x0F,0x1F,0x1C,0x0C,0x0F,0x08,0x48,0x98,
-    0x37,0x0A,0x13,0x04,0x11,0x0D,0x00
-  };
-  writeBytes((uint8_t*)pgam, 15);
-
-  /* 负伽马校正 */
-  writeCommand(CMD_NGAMCTRL);  // E1h
-  const uint8_t ngam[] = {
-    0x0F,0x32,0x2E,0x0B,0x0D,0x05,0x47,0x75,
-    0x37,0x06,0x10,0x03,0x24,0x20,0x00
-  };
-  writeBytes((uint8_t*)ngam, 15);
-
-  writeCommand(CMD_INVOFF);    // 20h - 关闭反转显示
-  writeCommand(CMD_DISPON);    // 29h - 打开显示
+  
+  // 电源控制
+  writeCommand(ILI9488_PWCTR1);
+  writeData(0x17);  // 设置VRH1[4:0] & VC[2:0]
+  writeData(0x15);  // 设置BT[2:0]
+  
+  writeCommand(ILI9488_PWCTR2);
+  writeData(0x41);  // 设置AP[7:0]
+  
+  writeCommand(ILI9488_VMCTR1);
+  writeData(0x00);
+  writeData(0x12);
+  writeData(0x80);
+  
+  // 内存访问控制 - 尝试BGR颜色顺序
+  writeCommand(ILI9488_MADCTL);
+  writeData(MADCTL_BGR | MADCTL_MX);
+  
+  // 像素格式设置 - 18位RGB666模式
+  writeCommand(ILI9488_PIXFMT);
+  writeData(0x66);  // 18-bit RGB666格式
+  
+  // 显示反转控制
+  writeCommand(ILI9488_INVCTR);
+  writeData(0x02);  // 2-dot inversion
+  
+  // 显示功能控制
+  writeCommand(ILI9488_DFUNCTR);
+  writeData(0x02);
+  writeData(0x02);
+  
+  // 颜色增强控制
+  writeCommand(0xF7);
+  writeData(0xA9);
+  writeData(0x51);
+  writeData(0x2C);
+  writeData(0x82);
+  
+  // 正伽马校正
+  writeCommand(ILI9488_GMCTRP1);
+  writeData(0x00); writeData(0x03); writeData(0x09); writeData(0x08); writeData(0x16);
+  writeData(0x0A); writeData(0x3F); writeData(0x78); writeData(0x4C); writeData(0x09);
+  writeData(0x0A); writeData(0x08); writeData(0x16); writeData(0x1A); writeData(0x0F);
+  
+  // 负伽马校正
+  writeCommand(ILI9488_GMCTRN1);
+  writeData(0x00); writeData(0x16); writeData(0x19); writeData(0x03); writeData(0x0F);
+  writeData(0x05); writeData(0x32); writeData(0x45); writeData(0x46); writeData(0x04);
+  writeData(0x0E); writeData(0x0D); writeData(0x35); writeData(0x37); writeData(0x0F);
+  
+  // 正常显示模式
+  writeCommand(ILI9488_NORON);
+  delay(10);
+  
+  // 关闭显示反转
+  writeCommand(ILI9488_INVOFF);
+  delay(10);
+  
+  // 打开显示
+  writeCommand(ILI9488_DISPON);
+  delay(100);
 }
 
 /* 设置旋转方向 */
 void AmebaILI9488::setRotation(uint8_t r) {
-  _madctl = 0x48;              // 基础值
-  switch (r & 3) {
-    case 0: 
-      _madctl |= 0x00; 
-      _width = 320; 
-      _height = 480; 
+  _rotation = r % 4;  // 确保旋转角度在0-3范围内
+  
+  writeCommand(ILI9488_MADCTL);
+  switch (_rotation) {
+    case 0:
+      writeData(MADCTL_BGR | MADCTL_MX);
+      _width = ILI9488_TFTWIDTH;
+      _height = ILI9488_TFTHEIGHT;
       break;
-    case 1: 
-      _madctl |= 0xA0; 
-      _width = 480; 
-      _height = 320; 
+    case 1:
+      writeData(MADCTL_BGR | MADCTL_MV);
+      _width = ILI9488_TFTHEIGHT;
+      _height = ILI9488_TFTWIDTH;
       break;
-    case 2: 
-      _madctl |= 0xC0; 
-      _width = 320; 
-      _height = 480; 
+    case 2:
+      writeData(MADCTL_BGR | MADCTL_MY);
+      _width = ILI9488_TFTWIDTH;
+      _height = ILI9488_TFTHEIGHT;
       break;
-    case 3: 
-      _madctl |= 0x60; 
-      _width = 480; 
-      _height = 320; 
+    case 3:
+      writeData(MADCTL_BGR | MADCTL_MX | MADCTL_MY | MADCTL_MV);
+      _width = ILI9488_TFTHEIGHT;
+      _height = ILI9488_TFTWIDTH;
       break;
   }
-  writeCommand(CMD_MADCTL);
-  writeData(_madctl);
+}
+
+/* 反转显示 */
+void AmebaILI9488::invertDisplay(boolean i) {
+  writeCommand(i ? ILI9488_INVON : ILI9488_INVOFF);
 }
 
 /* 设置GRAM窗口 */
 void AmebaILI9488::setAddrWindow(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-  writeCommand(CMD_CASET);
-  writeData16(x0);
-  writeData16(x1);
-  writeCommand(CMD_PASET);
-  writeData16(y0);
-  writeData16(y1);
+  writeCommand(ILI9488_CASET);
+  // 在18位模式下，仍使用16位地址
+  writeData(x0 >> 8);
+  writeData(x0 & 0xFF);
+  writeData(x1 >> 8);
+  writeData(x1 & 0xFF);
+  
+  writeCommand(ILI9488_PASET);
+  writeData(y0 >> 8);
+  writeData(y0 & 0xFF);
+  writeData(y1 >> 8);
+  writeData(y1 & 0xFF);
+  
+  // 准备写入RAM
+  writeCommand(ILI9488_RAMWR);
 }
 
-/* 清屏 */
-void AmebaILI9488::fillScreen(uint16_t color) {
-  setAddrWindow(0, 0, _width - 1, _height - 1);
-  writeCommand(CMD_RAMWR);
-  for (uint32_t i = 0; i < (uint32_t)_width * _height; i++) {
-    writePixel(color);
+/* 清屏 - 18位RGB666优化版 */
+void AmebaILI9488::fillScreen(uint32_t color) {
+  fillRect(0, 0, _width, _height, color);
+}
+
+/* 快速绘制水平线 */
+void AmebaILI9488::drawFastHLine(uint16_t x, uint16_t y, uint16_t w, uint32_t color) {
+  if ((x >= _width) || (y >= _height) || (y < 0)) return;
+  if ((x + w - 1) < 0) return;
+  
+  if (x < 0) {
+    w += x;
+    x = 0;
   }
+  if (x + w > _width) {
+    w = _width - x;
+  }
+  
+  setAddrWindow(x, y, x + w - 1, y);
+  
+  uint8_t r = (color >> 16) & 0xFF;
+  uint8_t g = (color >> 8) & 0xFF;
+  uint8_t b = color & 0xFF;
+  
+  CS_LOW();
+  DC_HIGH();
+  
+  for (uint16_t i = 0; i < w; i++) {
+    SPI_Transfer(r);
+    SPI_Transfer(g);
+    SPI_Transfer(b);
+  }
+  
+  CS_HIGH();
 }
 
-/* 绘制像素点 */
-void AmebaILI9488::drawPixel(uint16_t x, uint16_t y, uint16_t color) {
-  if (x >= _width || y >= _height) return;
+/* 快速绘制垂直线 */
+void AmebaILI9488::drawFastVLine(uint16_t x, uint16_t y, uint16_t h, uint32_t color) {
+  if ((x >= _width) || (x < 0) || (y >= _height)) return;
+  if ((y + h - 1) < 0) return;
+  
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+  if (y + h > _height) {
+    h = _height - y;
+  }
+  
+  setAddrWindow(x, y, x, y + h - 1);
+  
+  uint8_t r = (color >> 16) & 0xFF;
+  uint8_t g = (color >> 8) & 0xFF;
+  uint8_t b = color & 0xFF;
+  
+  CS_LOW();
+  DC_HIGH();
+  
+  for (uint16_t i = 0; i < h; i++) {
+    SPI_Transfer(r);
+    SPI_Transfer(g);
+    SPI_Transfer(b);
+  }
+  
+  CS_HIGH();
+}
+
+/* 绘制像素 */
+void AmebaILI9488::drawPixel(uint16_t x, uint16_t y, uint32_t color) {
+  if (x >= _width || y >= _height || x < 0 || y < 0) return;
   setAddrWindow(x, y, x, y);
-  writeCommand(CMD_RAMWR);
-  writePixel(color);
+  writePixelData(color);
 }
 
-/* 写入像素颜色，18-bit模式 */
-void AmebaILI9488::writePixel(uint16_t color) {
-  uint8_t r = (color >> 11) & 0x1F;
-  uint8_t g = (color >> 5)  & 0x3F;
-  uint8_t b =  color        & 0x1F;
-  writeData((r << 1) | (g >> 5));   // R[5:1] + G[5:4]
-  writeData((g << 3) | (b >> 3));   // G[3:0] + B[5:1]
-  writeData(b << 5);                // B[0] 和 0
+/* 写入像素颜色，18-bit RGB666模式 - 按照文档规范实现 */
+void AmebaILI9488::writePixelData(uint32_t color) {
+  // 确保RGB666格式的正确数据顺序：MSB为R5，LSB为B0
+  // 根据文档SPI模式下的18位像素数据顺序规范
+  DC_HIGH();
+  CS_LOW();
+  
+  // 提取RGB各6位数据，确保正确的位对齐
+  uint8_t r_high = (color >> 16) & 0xFF;  // R6位 (R5-R0)
+  uint8_t g_high = (color >> 8) & 0xFF;   // G6位 (G5-G0)
+  uint8_t b_high = color & 0xFF;          // B6位 (B5-B0)
+  
+  // 尝试调整颜色通道发送顺序 - 交换红蓝通道
+  // 注意：与MADCTL_BGR设置配合使用时，这里仍按R→G→B发送
+  // 控制器会根据MADCTL设置自动调整内部映射
+  SPI_Transfer(r_high);   // R6位（高字节）
+  SPI_Transfer(g_high);   // G6位（中字节）
+  SPI_Transfer(b_high);   // B6位（低字节）
+  
+  CS_HIGH();
 }
 
 /* 绘制线段 */
-void AmebaILI9488::drawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t color) {
+void AmebaILI9488::drawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint32_t color) {
   // Bresenham算法实现
   int16_t dx = abs((int16_t)x1 - (int16_t)x0);
   int16_t dy = abs((int16_t)y1 - (int16_t)y0);
@@ -183,29 +301,65 @@ void AmebaILI9488::drawLine(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, 
 }
 
 /* 绘制矩形 */
-void AmebaILI9488::drawRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color) {
+void AmebaILI9488::drawRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color) {
   drawLine(x, y, x + w - 1, y, color);
   drawLine(x, y + h - 1, x + w - 1, y + h - 1, color);
   drawLine(x, y, x, y + h - 1, color);
   drawLine(x + w - 1, y, x + w - 1, y + h - 1, color);
 }
 
-/* 填充矩形 */
-void AmebaILI9488::fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color) {
+/* 填充矩形 - 18位RGB666优化版 */
+void AmebaILI9488::fillRect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint32_t color) {
   if (x >= _width || y >= _height) return;
   if (x + w > _width) w = _width - x;
   if (y + h > _height) h = _height - y;
+  if (w <= 0 || h <= 0) return;
   
   setAddrWindow(x, y, x + w - 1, y + h - 1);
-  writeCommand(CMD_RAMWR);
   
+  // 提取RGB各6位数据，预计算以提高性能
+  uint8_t r_high = (color >> 16) & 0xFF;  // R6位 (R5-R0)
+  uint8_t g_high = (color >> 8) & 0xFF;   // G6位 (G5-G0)
+  uint8_t b_high = color & 0xFF;          // B6位 (B5-B0)
+  
+  // 优化：保持片选信号低直到所有像素都写入完成，提高填充效率
+  DC_HIGH();
+  CS_LOW();
+  
+  // 按照RGB666格式要求写入所有像素
   for (uint32_t i = 0; i < (uint32_t)w * h; i++) {
-    writePixel(color);
+    SPI_Transfer(r_high);   // R6位
+    SPI_Transfer(g_high);   // G6位
+    SPI_Transfer(b_high);   // B6位
+  }
+  
+  CS_HIGH();
+}
+
+/* 设置滚动位置 */
+void AmebaILI9488::scrollTo(uint16_t y) {
+  writeCommand(0x37);  // Vertical Scrolling Start Address
+  writeData(y >> 8);
+  writeData(y & 0xFF);
+}
+
+/* 设置滚动边距 */
+void AmebaILI9488::setScrollMargins(uint16_t top, uint16_t bottom) {
+  if (top + bottom <= _height) {
+    uint16_t middle = _height - top - bottom;
+    
+    writeCommand(0x33);  // Vertical Scrolling Definition
+    writeData(top >> 8);
+    writeData(top & 0xFF);
+    writeData(middle >> 8);
+    writeData(middle & 0xFF);
+    writeData(bottom >> 8);
+    writeData(bottom & 0xFF);
   }
 }
 
 /* 绘制圆形 */
-void AmebaILI9488::drawCircle(uint16_t x0, uint16_t y0, uint8_t r, uint16_t color) {
+void AmebaILI9488::drawCircle(uint16_t x0, uint16_t y0, uint8_t r, uint32_t color) {
   int16_t x = r;
   int16_t y = 0;
   int16_t err = 0;
@@ -230,7 +384,7 @@ void AmebaILI9488::drawCircle(uint16_t x0, uint16_t y0, uint8_t r, uint16_t colo
 }
 
 /* 填充圆形 */
-void AmebaILI9488::fillCircle(uint16_t x0, uint16_t y0, uint8_t r, uint16_t color) {
+void AmebaILI9488::fillCircle(uint16_t x0, uint16_t y0, uint8_t r, uint32_t color) {
   int16_t x = r;
   int16_t y = 0;
   int16_t err = 0;
@@ -262,37 +416,43 @@ void AmebaILI9488::setFontSize(uint8_t size) {
 }
 
 /* 设置前景色 */
-void AmebaILI9488::setForeground(uint16_t color) {
+void AmebaILI9488::setForeground(uint32_t color) {
   _foreground = color;
 }
 
 /* 设置背景色 */
-void AmebaILI9488::setBackground(uint16_t color) {
+void AmebaILI9488::setBackground(uint32_t color) {
   _background = color;
 }
 
 /* 绘制字符 */
-void AmebaILI9488::drawChar(uint16_t x, uint16_t y, char c, uint16_t color, uint16_t bg, uint8_t size) {
-  if ((x >= _width) || (y >= _height)) return;
-  if ((c < 32) || (c > 127)) c = ' ';
+void AmebaILI9488::drawChar(uint16_t x, uint16_t y, char c, uint32_t color, uint32_t bg, uint8_t size) {
+  if ((x >= _width) || (y >= _height) || ((x + 6 * size - 1) < 0) || ((y + 8 * size - 1) < 0)) {
+    return;
+  }
   
-  c -= 32; // 偏移到字体数组的开始位置
-  
-  for (int8_t i = 0; i < 5; i++) { // 5列宽的字体
-    uint8_t line = PGM_READ_BYTE(&font5x7[c * 5 + i]);
-    for (int8_t j = 0; j < 7; j++) { // 7行高的字体
-      if (line & (1 << j)) {
-        if (size == 1) {
-          drawPixel(x + i, y + j, color);
-        } else {
-          fillRect(x + i * size, y + j * size, size, size, color);
+  if (c >= 32 && c <= 127) {
+    for (int8_t i = 0; i < 6; i++) { // 6列宽，包括右边距
+      uint8_t line = 0;
+      if (i < 5) {
+        line = pgm_read_byte(font5x7 + (c - 32) * 5 + i);
+      }
+      
+      for (int8_t j = 0; j < 8; j++) {
+        if (line & 0x1) {
+          if (size == 1) {
+            drawPixel(x + i, y + j, color);
+          } else {
+            fillRect(x + i * size, y + j * size, size, size, color);
+          }
+        } else if (bg != color) {
+          if (size == 1) {
+            drawPixel(x + i, y + j, bg);
+          } else {
+            fillRect(x + i * size, y + j * size, size, size, bg);
+          }
         }
-      } else if (bg != color) {
-        if (size == 1) {
-          drawPixel(x + i, y + j, bg);
-        } else {
-          fillRect(x + i * size, y + j * size, size, size, bg);
-        }
+        line >>= 1;
       }
     }
   }
@@ -360,10 +520,15 @@ void AmebaILI9488::writeData(uint8_t data) {
   CS_HIGH();
 }
 
-/* 写入16位数据 */
-void AmebaILI9488::writeData16(uint16_t data) {
-  writeData(data >> 8);
-  writeData(data & 0xFF);
+/* 写入24位数据 */
+void AmebaILI9488::writeData24(uint32_t data) {
+  // 保持片选信号低直到三个字节都发送完成
+  DC_HIGH();
+  CS_LOW();
+  SPI_Transfer((data >> 16) & 0xFF);
+  SPI_Transfer((data >> 8) & 0xFF);
+  SPI_Transfer(data & 0xFF);
+  CS_HIGH();
 }
 
 /* 写入多个字节 */
@@ -374,4 +539,9 @@ void AmebaILI9488::writeBytes(uint8_t *data, uint32_t len) {
     SPI_Transfer(data[i]);
   }
   CS_HIGH();
+}
+
+/* RGB888到RGB666的转换方法实现 */
+uint32_t AmebaILI9488::color666(uint8_t r, uint8_t g, uint8_t b) {
+  return rgb888_to_rgb666(r, g, b);
 }
