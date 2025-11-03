@@ -20,19 +20,11 @@
 #define TFT_WR    6    // 写使能
 #define TFT_RD    7    // 读使能
 
-// 数据引脚 (8位)
-#define TFT_D0    8
-#define TFT_D1    9
-#define TFT_D2    2
-#define TFT_D3    3
-#define TFT_D4    10
-#define TFT_D5    11
-#define TFT_D6    13
-#define TFT_D7    14
+// 数据引脚 (8位) - 为Ameba平台定义引脚数组
+const PortPin dataPins[8] = {8, 9, 2, 3, 10, 11, 13, 14};
 
-// 创建8位并行总线驱动对象
-AmebaParallel8 tft(TFT_CS, TFT_DC, TFT_RESET, TFT_WR, TFT_RD,
-                   TFT_D0, TFT_D1, TFT_D2, TFT_D3, TFT_D4, TFT_D5, TFT_D6, TFT_D7);
+// 创建8位并行总线驱动对象 - 使用新的构造函数
+AmebaParallel8 tft(dataPins, TFT_CS, TFT_DC, TFT_RESET, TFT_WR, TFT_RD);
 
 void setup()
 {
