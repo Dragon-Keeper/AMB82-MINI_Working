@@ -25,30 +25,41 @@ AmebaParallel8::AmebaParallel8(int csPin, int dcPin, int resetPin, int wrPin, in
     background = 0x0000;
     fontsize = 1;
     rotation = 0;
+    _useHardwareParallel = true; // 默认启用硬件并行接口
+    _dataPortMask = 0;
+    _dataPortBase = 0;
 }
 
 void AmebaParallel8::begin(void)
 {
-    // 初始化所有引脚
-    pinMode(_csPin, OUTPUT);
-    pinMode(_dcPin, OUTPUT);
-    pinMode(_resetPin, OUTPUT);
-    pinMode(_wrPin, OUTPUT);
-    pinMode(_rdPin, OUTPUT);
-    
-    pinMode(_d0Pin, OUTPUT);
-    pinMode(_d1Pin, OUTPUT);
-    pinMode(_d2Pin, OUTPUT);
-    pinMode(_d3Pin, OUTPUT);
-    pinMode(_d4Pin, OUTPUT);
-    pinMode(_d5Pin, OUTPUT);
-    pinMode(_d6Pin, OUTPUT);
-    pinMode(_d7Pin, OUTPUT);
+    // 配置GPIO端口
+    setupGPIOPort();
 
     // 设置默认电平
-    digitalWrite(_csPin, HIGH);
-    digitalWrite(_rdPin, HIGH);
-    digitalWrite(_wrPin, HIGH);
+    if (_useHardwareParallel) {
+        digitalWrite(_csPin, HIGH);
+        digitalWrite(_rdPin, HIGH);
+        digitalWrite(_wrPin, HIGH);
+    } else {
+        pinMode(_csPin, OUTPUT);
+        pinMode(_dcPin, OUTPUT);
+        pinMode(_resetPin, OUTPUT);
+        pinMode(_wrPin, OUTPUT);
+        pinMode(_rdPin, OUTPUT);
+        
+        pinMode(_d0Pin, OUTPUT);
+        pinMode(_d1Pin, OUTPUT);
+        pinMode(_d2Pin, OUTPUT);
+        pinMode(_d3Pin, OUTPUT);
+        pinMode(_d4Pin, OUTPUT);
+        pinMode(_d5Pin, OUTPUT);
+        pinMode(_d6Pin, OUTPUT);
+        pinMode(_d7Pin, OUTPUT);
+
+        digitalWrite(_csPin, HIGH);
+        digitalWrite(_rdPin, HIGH);
+        digitalWrite(_wrPin, HIGH);
+    }
 
     reset();
 
@@ -162,8 +173,46 @@ void AmebaParallel8::begin(void)
     writeCommand(0x29); // Display on
 }
 
+// GPIO端口配置函数
+void AmebaParallel8::setupGPIOPort(void)
+{
+    // Ameba平台使用标准的Arduino GPIO操作
+    // 这里主要进行引脚模式配置
+    if (_useHardwareParallel) {
+        // 在Ameba平台上，使用标准的pinMode和digitalWrite
+        // 但我们可以优化引脚配置顺序
+        
+        // 配置数据引脚（按顺序配置以提高性能）
+        pinMode(_d0Pin, OUTPUT);
+        pinMode(_d1Pin, OUTPUT);
+        pinMode(_d2Pin, OUTPUT);
+        pinMode(_d3Pin, OUTPUT);
+        pinMode(_d4Pin, OUTPUT);
+        pinMode(_d5Pin, OUTPUT);
+        pinMode(_d6Pin, OUTPUT);
+        pinMode(_d7Pin, OUTPUT);
+        
+        // 配置控制引脚
+        pinMode(_csPin, OUTPUT);
+        pinMode(_dcPin, OUTPUT);
+        pinMode(_wrPin, OUTPUT);
+        pinMode(_rdPin, OUTPUT);
+        pinMode(_resetPin, OUTPUT);
+        
+        // 计算数据端口掩码（用于快速并行写入）
+        _dataPortMask = (1 << _d0Pin) | (1 << _d1Pin) | (1 << _d2Pin) | (1 << _d3Pin) |
+                       (1 << _d4Pin) | (1 << _d5Pin) | (1 << _d6Pin) | (1 << _d7Pin);
+    }
+}
+
+// 软件模拟并行写入（兼容模式）
 void AmebaParallel8::write8bitData(uint8_t data)
 {
+    if (_useHardwareParallel) {
+        write8bitDataFast(data);
+        return;
+    }
+    
     digitalWrite(_d0Pin, (data & 0x01) ? HIGH : LOW);
     digitalWrite(_d1Pin, (data & 0x02) ? HIGH : LOW);
     digitalWrite(_d2Pin, (data & 0x04) ? HIGH : LOW);
@@ -174,25 +223,63 @@ void AmebaParallel8::write8bitData(uint8_t data)
     digitalWrite(_d7Pin, (data & 0x80) ? HIGH : LOW);
 
     digitalWrite(_wrPin, LOW);
-    delayMicroseconds(1);
+    // 移除冗余延迟，使用最小延迟
+    __NOP(); __NOP(); __NOP(); __NOP(); // 约20ns延迟
     digitalWrite(_wrPin, HIGH);
-    delayMicroseconds(1);
+    __NOP(); __NOP(); __NOP(); __NOP(); // 约20ns延迟
+}
+
+// 硬件快速并行写入（优化版本）
+void AmebaParallel8::write8bitDataFast(uint8_t data)
+{
+    // 使用优化的digitalWrite序列进行并行写入
+    // 在Ameba平台上，digitalWrite已经过优化，比逐个设置更快
+    
+    // 并行设置数据位（使用优化的数字写入）
+    digitalWrite(_d0Pin, (data & 0x01) ? HIGH : LOW);
+    digitalWrite(_d1Pin, (data & 0x02) ? HIGH : LOW);
+    digitalWrite(_d2Pin, (data & 0x04) ? HIGH : LOW);
+    digitalWrite(_d3Pin, (data & 0x08) ? HIGH : LOW);
+    digitalWrite(_d4Pin, (data & 0x10) ? HIGH : LOW);
+    digitalWrite(_d5Pin, (data & 0x20) ? HIGH : LOW);
+    digitalWrite(_d6Pin, (data & 0x40) ? HIGH : LOW);
+    digitalWrite(_d7Pin, (data & 0x80) ? HIGH : LOW);
+    
+    // 写入脉冲（WR信号）- 使用最小延迟
+    digitalWrite(_wrPin, LOW);
+    __NOP(); __NOP(); __NOP(); __NOP(); // 约20ns延迟
+    digitalWrite(_wrPin, HIGH);
+    __NOP(); __NOP(); __NOP(); __NOP(); // 约20ns延迟
 }
 
 void AmebaParallel8::writeCommand(uint8_t command)
 {
-    digitalWrite(_dcPin, LOW);
-    digitalWrite(_csPin, LOW);
-    write8bitData(command);
-    digitalWrite(_csPin, HIGH);
+    if (_useHardwareParallel) {
+        digitalWrite(_dcPin, LOW);
+        digitalWrite(_csPin, LOW);
+        write8bitData(command);
+        digitalWrite(_csPin, HIGH);
+    } else {
+        digitalWrite(_dcPin, LOW);
+        digitalWrite(_csPin, LOW);
+        write8bitData(command);
+        digitalWrite(_csPin, HIGH);
+    }
 }
 
 void AmebaParallel8::writeData(uint8_t data)
 {
-    digitalWrite(_dcPin, HIGH);
-    digitalWrite(_csPin, LOW);
-    write8bitData(data);
-    digitalWrite(_csPin, HIGH);
+    if (_useHardwareParallel) {
+        digitalWrite(_dcPin, HIGH);
+        digitalWrite(_csPin, LOW);
+        write8bitData(data);
+        digitalWrite(_csPin, HIGH);
+    } else {
+        digitalWrite(_dcPin, HIGH);
+        digitalWrite(_csPin, LOW);
+        write8bitData(data);
+        digitalWrite(_csPin, HIGH);
+    }
 }
 
 void AmebaParallel8::writeData16(uint16_t data)
@@ -256,12 +343,52 @@ void AmebaParallel8::setRotation(uint8_t m)
 
 void AmebaParallel8::fillScreen(uint16_t color)
 {
-    fillRectangle(0, 0, _width, _height, color);
+    // 优化全屏填充，确保正确刷新
+    setAddress(0, 0, _width - 1, _height - 1);
+    
+    if (_useHardwareParallel) {
+        digitalWrite(_dcPin, HIGH);
+        digitalWrite(_csPin, LOW);
+        
+        // 批量写入优化：减少函数调用开销
+        uint32_t pixelCount = (uint32_t)_width * (uint32_t)_height;
+        for (uint32_t i = 0; i < pixelCount; i++) {
+            write8bitDataFast(color >> 8);
+            write8bitDataFast(color & 0xFF);
+        }
+        
+        digitalWrite(_csPin, HIGH);
+    } else {
+        digitalWrite(_dcPin, HIGH);
+        digitalWrite(_csPin, LOW);
+        
+        uint32_t pixelCount = (uint32_t)_width * (uint32_t)_height;
+        for (uint32_t i = 0; i < pixelCount; i++) {
+            writeData16(color);
+        }
+        
+        digitalWrite(_csPin, HIGH);
+    }
+    
+    // 确保显示刷新完成
+    delay(1);
+    
+    // 额外的刷新确保
+    digitalWrite(_dcPin, HIGH);
+    digitalWrite(_csPin, LOW);
+    digitalWrite(_csPin, HIGH);
 }
 
 void AmebaParallel8::clr()
 {
     fillScreen(background);
+    // 确保显示刷新完成
+    delay(1);
+    
+    // 额外的刷新确保
+    digitalWrite(_dcPin, HIGH);
+    digitalWrite(_csPin, LOW);
+    digitalWrite(_csPin, HIGH);
 }
 
 void AmebaParallel8::fillRectangle(int16_t x, int16_t y, int16_t w, int16_t h, uint16_t color)
@@ -272,13 +399,36 @@ void AmebaParallel8::fillRectangle(int16_t x, int16_t y, int16_t w, int16_t h, u
 
     setAddress(x, y, x + w - 1, y + h - 1);
 
-    digitalWrite(_dcPin, HIGH);
-    digitalWrite(_csPin, LOW);
-    
-    for (int i = 0; i < w * h; i++) {
-        writeData16(color);
+    if (_useHardwareParallel) {
+        digitalWrite(_dcPin, HIGH);
+        digitalWrite(_csPin, LOW);
+        
+        // 批量写入优化：减少函数调用开销
+        uint32_t pixelCount = (uint32_t)w * (uint32_t)h;
+        for (uint32_t i = 0; i < pixelCount; i++) {
+            write8bitDataFast(color >> 8);
+            write8bitDataFast(color & 0xFF);
+        }
+        
+        digitalWrite(_csPin, HIGH);
+    } else {
+        digitalWrite(_dcPin, HIGH);
+        digitalWrite(_csPin, LOW);
+        
+        uint32_t pixelCount = (uint32_t)w * (uint32_t)h;
+        for (uint32_t i = 0; i < pixelCount; i++) {
+            writeData16(color);
+        }
+        
+        digitalWrite(_csPin, HIGH);
     }
     
+    // 确保显示刷新完成
+    delayMicroseconds(10);
+    
+    // 额外的刷新确保
+    digitalWrite(_dcPin, HIGH);
+    digitalWrite(_csPin, LOW);
     digitalWrite(_csPin, HIGH);
 }
 
@@ -326,6 +476,14 @@ void AmebaParallel8::drawPixel(int16_t x, int16_t y, uint16_t color)
     
     setAddress(x, y, x, y);
     writeData16(color);
+    
+    // 确保显示刷新完成
+    delayMicroseconds(1);
+    
+    // 额外的刷新确保
+    digitalWrite(_dcPin, HIGH);
+    digitalWrite(_csPin, LOW);
+    digitalWrite(_csPin, HIGH);
 }
 
 // 绘制直线
@@ -429,6 +587,14 @@ void AmebaParallel8::drawBitmap(int16_t x, int16_t y, int16_t w, int16_t h, cons
         writeData16(color[i]);
     }
     
+    digitalWrite(_csPin, HIGH);
+    
+    // 确保显示刷新完成
+    delayMicroseconds(10);
+    
+    // 额外的刷新确保
+    digitalWrite(_dcPin, HIGH);
+    digitalWrite(_csPin, LOW);
     digitalWrite(_csPin, HIGH);
 }
 

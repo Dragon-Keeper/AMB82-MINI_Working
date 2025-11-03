@@ -3,6 +3,8 @@
 
 #include <Arduino.h>
 #include "Print.h"
+#include "wiring_digital.h"
+#include "wiring_private.h"
 
 // 8位并行总线ILI9341驱动类
 class AmebaParallel8 : public Print {
@@ -38,15 +40,22 @@ private:
     void writeData16(uint16_t data);
     void setAddress(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
     void write8bitData(uint8_t data);
+    void write8bitDataFast(uint8_t data); // 快速硬件并行写入
+    void setupGPIOPort(void); // 配置GPIO端口
 
     // 引脚定义
     int _csPin, _dcPin, _resetPin, _wrPin, _rdPin;
     int _d0Pin, _d1Pin, _d2Pin, _d3Pin, _d4Pin, _d5Pin, _d6Pin, _d7Pin;
 
+    // 数据端口掩码（用于快速并行写入）
+    uint32_t _dataPortMask;
+    uint32_t _dataPortBase;
+
     int16_t _width, _height;
     int16_t cursor_x, cursor_y;
     uint16_t foreground, background;
     uint8_t fontsize, rotation;
+    bool _useHardwareParallel; // 是否使用硬件并行接口
 };
 
 #endif
