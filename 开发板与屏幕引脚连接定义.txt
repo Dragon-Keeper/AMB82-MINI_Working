@@ -1,7 +1,0 @@
-#define TFT_CS     12   //ArduinoPin_12 - SPI2_CS (IOE4)
-#define TFT_DC     16   //ArduinoPin_16 - PD_18 (未被系统占用)
-#define TFT_RST    9    //IOF2
-#define TFT_LED    11   // IOF0 (GPIOE_0) - 背光控制
-#define TFT_SCK    15   //ArduinoPin_15 - SPI2_SCL (IOE1)
-#define TFT_MOSI   13   //ArduinoPin_13 - SPI2_MOSI (IOE3)
-//#define TFT_MISO   14   //ArduinoPin_14 - SPI2_MISO (IOE2)
