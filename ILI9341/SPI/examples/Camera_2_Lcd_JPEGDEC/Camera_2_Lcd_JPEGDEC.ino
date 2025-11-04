@@ -37,7 +37,8 @@
 
 #include "VideoStream.h"
 #include "SPI.h"
-#include "AmebaILI9341.h"
+// 使用硬件并口驱动替代SPI驱动
+#include "AmebaParallel8.h"
 // Include the jpeg decoder library
 #include <JPEGDEC_Libraries/JPEGDEC.h>
 
@@ -45,14 +46,20 @@ long lTime;
 
 #define CHANNEL 0
 
-#define TFT_RESET 5
-#define TFT_DC    4
-#define TFT_CS    SPI_SS
+// 硬件并口引脚定义 - 8位数据线 + 5个控制线
+// 使用与LCD_Screen_ILI9341_TFT.ino相同的引脚配置
+#define TFT_CS    12   // 片选
+#define TFT_DC    4    // 数据/命令选择
+#define TFT_RESET 5    // 复位
+#define TFT_WR    6    // 写使能
+#define TFT_RD    7    // 读使能
 
+// 8位数据引脚定义 (D0-D7)
+// 使用与LCD_Screen_ILI9341_TFT.ino相同的引脚配置
+const PortPin dataPins[8] = {8, 9, 2, 3, 10, 11, 13, 14};
 
-AmebaILI9341 tft = AmebaILI9341(TFT_CS, TFT_DC, TFT_RESET);
-
-#define ILI9341_SPI_FREQUENCY 50000000
+// 使用硬件并口驱动
+AmebaParallel8 tft(dataPins, TFT_CS, TFT_DC, TFT_RESET, TFT_WR, TFT_RD);
 
 VideoSetting config(VIDEO_VGA, CAM_FPS, VIDEO_JPEG, 1);
 
@@ -71,9 +78,7 @@ void setup()
 {
     Serial.begin(115200);
 
-    Serial.println("TFT ILI9341 ");
-
-    SPI.setDefaultFrequency(ILI9341_SPI_FREQUENCY);
+    Serial.println("TFT ILI9341 - Hardware Parallel 8-bit Interface");
 
     Camera.configVideoChannel(CHANNEL, config);
     Camera.videoInit();
