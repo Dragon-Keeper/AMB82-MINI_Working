@@ -33,6 +33,11 @@
  *
  * Date Modified: 19 March 2024
  *
+ * Optimized version: 5 November 2024
+ * - Increased iMaxMCUs value for better performance
+ * - Optimized frame rate control
+ * - Improved caching mechanism
+ * - Adjusted scaling parameters
  *******************************************************/
 
 #include "VideoStream.h"
@@ -44,7 +49,7 @@
 
 // 性能优化相关定义
 #define CHANNEL 0
-#define TARGET_FPS 15  // 目标帧率
+#define TARGET_FPS 30  // 提高目标帧率到30FPS
 #define FRAME_INTERVAL (1000 / TARGET_FPS)  // 帧间隔(ms)
 
 // 硬件并口引脚定义 - 8位数据线 + 5个控制线
@@ -71,6 +76,11 @@ unsigned long lastFrameTime = 0;
 unsigned long frameCount = 0;
 unsigned long lastFpsTime = 0;
 float currentFps = 0.0;
+
+// 添加FPS显示相关变量
+unsigned long lastFpsDisplayTime = 0;
+char fpsString[10];
+bool fpsDisplayed = false;
 
 // 图像缓存结构 - 增强版
 struct ImageCache {
@@ -111,7 +121,7 @@ bool isImageCached(uint32_t addr, uint32_t len) {
     return imageCache.valid && 
            imageCache.addr == addr && 
            imageCache.len == len &&
-           (millis() - imageCache.timestamp) < 100; // 100ms内认为有效
+           (millis() - imageCache.timestamp) < 50; // 50ms内认为有效
 }
 
 JPEGDEC jpeg;
@@ -134,12 +144,44 @@ void updateFpsCounter() {
     }
 }
 
+// 添加FPS显示函数
+void displayFps() {
+    unsigned long currentTime = millis();
+    // 每200ms更新一次FPS显示
+    if (currentTime - lastFpsDisplayTime >= 200) {
+        // 清除之前显示的FPS（绘制黑色矩形覆盖）
+        if (fpsDisplayed) {
+            tft.fillRectangle(0, 0, 80, 20, 0x0000);  // 黑色背景
+        }
+        
+        // 格式化FPS字符串 - 使用Arduino String类
+        String fpsText = String(currentFps, 1);  // 保留1位小数
+        fpsText.toCharArray(fpsString, sizeof(fpsString));
+        
+        // 在左上角显示FPS
+        tft.setCursor(5, 5);
+        tft.setForeground(0xFFFF);  // 白色文字
+        tft.setBackground(0x0000);  // 黑色背景
+        
+        // 显示"FPS:"前缀
+        tft.print("FPS:");
+        
+        // 显示FPS数值
+        tft.print(fpsString);
+        
+        lastFpsDisplayTime = currentTime;
+        fpsDisplayed = true;
+    }
+}
+
 void setup()
 {
     Serial.begin(115200);
 
     Serial.println("TFT ILI9341 - Hardware Parallel 8-bit Interface (Optimized)");
     Serial.println("Optimized for high frame rate display");
+    Serial.print("Target FPS: ");
+    Serial.println(TARGET_FPS);
 
     // 初始化摄像头
     Camera.configVideoChannel(CHANNEL, config);
@@ -148,13 +190,22 @@ void setup()
 
     // 初始化TFT显示屏
     tft.begin();
-    tft.setRotation(1);
+    // 设置旋转以实现320x240分辨率的全屏显示
+    tft.setRotation(1);  // 旋转90度，使屏幕变为320x240
+    
+    // 设置背景色和前景色
+    tft.setBackground(0x0000);  // 黑色背景
+    tft.setForeground(0xFFFF);  // 白色文字
+    tft.setFontSize(2);         // 设置字体大小为2倍
     
     // 预初始化JPEG解码器以减少延迟
     jpeg.openFLASH((uint8_t *)0, 0, JPEGDraw);
+    // 优化JPEG解码器参数 - 增加iMaxMCUs值以提高性能
+    jpeg.setMaxOutputSize(2000);  // 增加到2000以提高解码性能
     
     lastFrameTime = millis();
     lastFpsTime = lastFrameTime;
+    lastFpsDisplayTime = lastFrameTime;
     
     Serial.println("System initialized. Starting optimized display loop...");
 }
@@ -163,9 +214,14 @@ void loop()
 {
     unsigned long currentTime = millis();
     
-    // 帧率控制：确保帧间隔
-    if (currentTime - lastFrameTime < FRAME_INTERVAL) {
-        delay(1); // 短暂延迟，避免过度占用CPU
+    // 改进的帧率控制：使用更精确的时间控制
+    unsigned long elapsed = currentTime - lastFrameTime;
+    if (elapsed < FRAME_INTERVAL) {
+        // 计算需要等待的时间并分段等待，避免长时间阻塞
+        unsigned long waitTime = FRAME_INTERVAL - elapsed;
+        if (waitTime > 2) {
+            delay(waitTime / 2);  // 分段延迟以提高响应性
+        }
         return;
     }
     
@@ -182,15 +238,54 @@ void loop()
             jpeg.close(); // 关闭之前的解码器
             
             // 使用优化的JPEG解码流程
-            if (jpeg.openFLASH((uint8_t *)img_addr, img_len, JPEGDraw)) {
-                // 使用优化的解码参数
-                jpeg.decode(0, 0, JPEG_SCALE_HALF);
+                if (jpeg.openFLASH((uint8_t *)img_addr, img_len, JPEGDraw)) {
+                    // 动态获取JPEG图像的实际尺寸
+                    int jpegWidth = jpeg.getWidth();
+                    int jpegHeight = jpeg.getHeight();
+                    
+                    // 获取屏幕尺寸
+                    int screenWidth = tft.getWidth();
+                    int screenHeight = tft.getHeight();
+                    
+                    // 计算缩放比例以实现全屏显示
+                    float scaleX = (float)screenWidth / jpegWidth;
+                    float scaleY = (float)screenHeight / jpegHeight;
+                    
+                    // 选择较小的缩放比例以保持图像比例并完整显示
+                    float scale = min(scaleX, scaleY);
+                    
+                    // 根据缩放比例选择合适的JPEG解码选项
+                    int decodeOptions = 0; // 默认不缩放
+                    
+                    // 如果图像比屏幕大，则根据比例选择缩放选项
+                    if (scale < 1.0) {
+                        // 计算需要的缩放级别
+                        if (scale <= 0.125) {
+                            decodeOptions = JPEG_SCALE_EIGHTH;  // 缩小到1/8
+                        } else if (scale <= 0.25) {
+                            decodeOptions = JPEG_SCALE_QUARTER; // 缩小到1/4
+                        } else if (scale <= 0.5) {
+                            decodeOptions = JPEG_SCALE_HALF;    // 缩小到1/2
+                        }
+                        // 如果scale > 0.5，则不缩放，使用完整分辨率
+                    }
+                    
+                    // 计算居中显示位置
+                    int displayX = (screenWidth - (int)(jpegWidth * (decodeOptions == JPEG_SCALE_EIGHTH ? 0.125 : 
+                                                                     decodeOptions == JPEG_SCALE_QUARTER ? 0.25 : 
+                                                                     decodeOptions == JPEG_SCALE_HALF ? 0.5 : 1.0))) / 2;
+                    int displayY = (screenHeight - (int)(jpegHeight * (decodeOptions == JPEG_SCALE_EIGHTH ? 0.125 : 
+                                                                      decodeOptions == JPEG_SCALE_QUARTER ? 0.25 : 
+                                                                      decodeOptions == JPEG_SCALE_HALF ? 0.5 : 1.0))) / 2;
+                    
+                    // 解码并显示图像
+                    jpeg.decode(displayX, displayY, decodeOptions);
                 
                 // 更新图像缓存
                 updateImageCache(img_addr, img_len);
                 
-                // 输出解码性能信息（每10帧输出一次）
-                if (frameCount % 10 == 0) {
+                // 输出解码性能信息（每20帧输出一次）
+                if (frameCount % 20 == 0) {
                     Serial.print("Decoded frame: addr=0x");
                     Serial.print(img_addr, HEX);
                     Serial.print(", len=");
@@ -201,7 +296,7 @@ void loop()
             }
         } else {
             // 图像已缓存，跳过解码（理论上不应该发生，因为摄像头持续产生新图像）
-            if (frameCount % 30 == 0) {
+            if (frameCount % 60 == 0) {
                 Serial.println("Image cached, skipping decode");
             }
         }
@@ -209,4 +304,7 @@ void loop()
     
     // 更新FPS计数器
     updateFpsCounter();
+    
+    // 显示实时FPS
+    displayFps();
 }

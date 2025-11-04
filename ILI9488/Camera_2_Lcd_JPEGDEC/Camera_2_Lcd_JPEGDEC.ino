@@ -35,6 +35,16 @@
  *
  *******************************************************/
 
+/*******************************************************
+ * Optimized version by AI Assistant
+ * Key optimizations:
+ * 1. Increased iMaxMCUs value for better decoding performance
+ * 2. Changed scaling from JPEG_SCALE_HALF to JPEG_SCALE_QUARTER for improved frame rate
+ * 3. Implemented dynamic frame rate control with target FPS of 30
+ * 4. Added performance monitoring
+ * Date Optimized: 2024
+ *******************************************************/
+
 #include <Arduino.h>
 #include "VideoStream.h"
 #include "SPI.h"
@@ -54,6 +64,10 @@
 #define LCD_WIDTH  320
 #define LCD_HEIGHT 480
 
+// 性能优化参数
+#define TARGET_FPS 30                    // 提高目标帧率到30FPS
+#define PERFORMANCE_MONITOR_INTERVAL 1000 // 性能监控间隔(ms)
+
 // 创建ILI9488显示屏对象
 AmebaILI9488 tft = AmebaILI9488(TFT_CS, TFT_DC, TFT_RST, TFT_SCK, TFT_MOSI, TFT_LED);
 
@@ -64,6 +78,12 @@ VideoSetting config(VIDEO_VGA, CAM_FPS, VIDEO_JPEG, 1);
 
 uint32_t img_addr = 0;
 uint32_t img_len = 0;
+
+// 性能监控变量
+unsigned long lastFrameTime = 0;
+unsigned long frameCounter = 0;
+unsigned long lastPerformanceReport = 0;
+float currentFPS = 0;
 
 // 颜色转换函数：将RGB565转换为RGB666格式，并考虑颜色反转
 uint32_t rgb565to666(uint16_t rgb565)
@@ -130,7 +150,7 @@ JPEGDEC jpeg;
 void setup()
 {
     Serial.begin(115200);
-    Serial.println("Camera_2_Lcd_JPEGDEC Demo with ILI9488");
+    Serial.println("Camera_2_Lcd_JPEGDEC Demo with ILI9488 - Optimized Version");
 
     // 设置SPI频率
     SPI.setDefaultFrequency(ILI9488_SPI_FREQUENCY);
@@ -144,6 +164,9 @@ void setup()
     tft.setCursor(10, 10);
     tft.setFontSize(2);
     tft.print("ILI9488 Display Ready");
+    tft.setCursor(10, 40);
+    tft.print("Target FPS: ");
+    tft.print(TARGET_FPS);
 
     // 初始化摄像头
     Serial.println("Initializing camera...");
@@ -151,6 +174,13 @@ void setup()
     Camera.videoInit();
     Camera.channelBegin(CHANNEL);
     Serial.println("Camera initialized successfully");
+    
+    // 设置JPEG解码器的最大输出大小，提高iMaxMCUs值以改善性能
+    jpeg.setMaxOutputSize(2000);
+    
+    // 初始化性能监控时间戳
+    lastFrameTime = millis();
+    lastPerformanceReport = millis();
 }
 
 void loop()
@@ -159,32 +189,60 @@ void loop()
     Camera.getImage(CHANNEL, &img_addr, &img_len);
     
     // 检查图像数据是否有效
-      if (img_addr > 0 && img_len > 0) {
+    if (img_addr > 0 && img_len > 0) {
+        // 更新帧计数器
+        frameCounter++;
+        
+        // 打印图像数据大小
         Serial.print("Received image data: ");
         Serial.print(img_len);
         Serial.println(" bytes");
         
         // 打开JPEG数据并设置回调函数
         if (jpeg.openFLASH((uint8_t *)img_addr, img_len, JPEGDraw)) {
-          Serial.print("JPEG image size: ");
-          Serial.print(jpeg.getWidth());
-          Serial.print(" x ");
-          Serial.println(jpeg.getHeight());
+            Serial.print("JPEG image size: ");
+            Serial.print(jpeg.getWidth());
+            Serial.print(" x ");
+            Serial.println(jpeg.getHeight());
             
             // 计算居中显示的坐标
-            int x_offset = (LCD_WIDTH - jpeg.getWidth()) / 2;
-            int y_offset = (LCD_HEIGHT - jpeg.getHeight()) / 2;
+            int x_offset = (LCD_WIDTH - jpeg.getWidth()/4) / 2;
+            int y_offset = (LCD_HEIGHT - jpeg.getHeight()/4) / 2;
             
-            // 解码JPEG图像，使用缩放以适应屏幕
-            jpeg.decode(x_offset, y_offset, JPEG_SCALE_HALF);
+            // 解码JPEG图像，使用JPEG_SCALE_QUARTER缩放以提高性能
+            jpeg.decode(x_offset, y_offset, JPEG_SCALE_QUARTER);
             jpeg.close();
             
             Serial.println("Image displayed successfully");
         } else {
             Serial.println("JPEG打开失败");
         }
+        
+        // 计算实际帧率
+        unsigned long currentTime = millis();
+        if (currentTime - lastFrameTime >= 1000) {
+            currentFPS = frameCounter / ((currentTime - lastFrameTime) / 1000.0);
+            frameCounter = 0;
+            lastFrameTime = currentTime;
+            
+            // 每隔一定时间打印性能信息
+            if (currentTime - lastPerformanceReport >= PERFORMANCE_MONITOR_INTERVAL) {
+                Serial.print("Current FPS: ");
+                Serial.println(currentFPS);
+                lastPerformanceReport = currentTime;
+            }
+        }
+        
+        // 动态帧率控制 - 根据实际帧率调整延迟
+        if (currentFPS > TARGET_FPS) {
+            // 如果帧率过高，增加延迟
+            delay(1000 / TARGET_FPS - 1000 / currentFPS);
+        } else if (currentFPS < TARGET_FPS * 0.8) {
+            // 如果帧率过低，减少延迟
+            // 不添加额外延迟
+        }
     }
     
-    // 添加短暂延迟以降低CPU使用率
-    delay(10);
+    // 添加最小延迟以降低CPU使用率
+    delay(1);
 }

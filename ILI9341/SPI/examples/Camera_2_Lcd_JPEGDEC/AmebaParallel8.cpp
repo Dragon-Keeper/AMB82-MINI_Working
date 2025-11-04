@@ -609,26 +609,37 @@ void AmebaParallel8::drawBitmapOptimized(int16_t x, int16_t y, int16_t w, int16_
     delayMicroseconds(2);
 }
 
-// 绘制字符
+// 绘制字符 - 使用5x7字体数据的增强版实现
 void AmebaParallel8::drawChar(int16_t x, int16_t y, unsigned char c, uint16_t fontcolor, uint16_t background, uint8_t fontsize)
 {
-    // 简单的字符绘制实现
-    // 这里可以扩展为使用真正的字体数据
-    if (c >= 'A' && c <= 'Z') {
-        // 简单的大写字母绘制
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 8; j++) {
-                if (i == 0 || i == 7 || j == 0 || j == 7) {
-                    drawPixel(x + j * fontsize, y + i * fontsize, fontcolor);
+    // 包含5x7字体数据
+    #include "font5x7.h"
+    
+    // 字符索引计算（从空格字符开始）
+    if (c < 32 || c > 126) return; // 只处理可打印ASCII字符
+    uint8_t charIndex = (c - 32) * 5; // 每个字符5列
+    
+    // 绘制字符的每一列
+    for (int col = 0; col < 5; col++) {
+        uint8_t colData = pgm_read_byte(&font5x7[charIndex + col]);
+        
+        // 绘制列中的每一行
+        for (int row = 0; row < 7; row++) {
+            if (colData & (1 << row)) {
+                // 绘制前景色像素
+                if (fontsize == 1) {
+                    drawPixel(x + col, y + row, fontcolor);
+                } else {
+                    // 放大字体
+                    fillRectangle(x + col * fontsize, y + row * fontsize, fontsize, fontsize, fontcolor);
                 }
-            }
-        }
-    } else if (c >= 'a' && c <= 'z') {
-        // 简单的小写字母绘制
-        for (int i = 0; i < 8; i++) {
-            for (int j = 0; j < 8; j++) {
-                if (i == 0 || i == 4 || j == 0 || j == 7) {
-                    drawPixel(x + j * fontsize, y + i * fontsize, fontcolor);
+            } else if (background != fontcolor) {
+                // 绘制背景色像素
+                if (fontsize == 1) {
+                    drawPixel(x + col, y + row, background);
+                } else {
+                    // 放大字体
+                    fillRectangle(x + col * fontsize, y + row * fontsize, fontsize, fontsize, background);
                 }
             }
         }
