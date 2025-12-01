@@ -1,11 +1,8 @@
 {
 	"folders": [
-		{
-			"path": "."
-		},
-		{
-			"path": "C:/Users/Debug/AppData/Local/Temp/BNZ.6915ce7b53265c9/libraries"
-		}
-	],
+        {
+            "path": "."
+        }
+    ],
     "settings": {}
 }
