@@ -2,6 +2,9 @@
 	"folders": [
         {
             "path": "."
+        },
+        {
+            "path": "../3.2寸TFT_IPS_ST7789/STM32F1_ST7789_IPS_4SPI_CTP Demo_V1"
         }
     ],
     "settings": {}
