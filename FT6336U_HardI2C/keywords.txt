@@ -1,0 +1,50 @@
+#######################################
+# Syntax Coloring Map For FT6336U_HardI2C
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+FT6336U_HardI2C	KEYWORD1
+TouchPoint	KEYWORD1
+TouchEvent	KEYWORD1
+ChipInfo	KEYWORD1
+TouchEventType	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+begin	KEYWORD2
+end	KEYWORD2
+configure	KEYWORD2
+isTouched	KEYWORD2
+getTouchCount	KEYWORD2
+isTouchActive	KEYWORD2
+getTouchPoint	KEYWORD2
+getTouchPointFull	KEYWORD2
+getAllTouchPoints	KEYWORD2
+hasNewEvent	KEYWORD2
+readTouchData	KEYWORD2
+enableInterrupt	KEYWORD2
+disableInterrupt	KEYWORD2
+getChipInfo	KEYWORD2
+printChipInfo	KEYWORD2
+enableDebug	KEYWORD2
+printStatus	KEYWORD2
+testEvents	KEYWORD2
+setI2CClock	KEYWORD2
+setI2CAddress	KEYWORD2
+setDebounceTime	KEYWORD2
+getVersion	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+FT6336U_I2C_ADDR	LITERAL1
+FT6336U_MAX_TOUCH_POINTS	LITERAL1
+FT6336U_I2C_CLOCK	LITERAL1
+FT6336U_POLL_INTERVAL	LITERAL1
+TOUCH_EVENT_NONE	LITERAL1
+TOUCH_EVENT_PRESS	LITERAL1
+TOUCH_EVENT_RELEASE	LITERAL1
+TOUCH_EVENT_CONTACT	LITERAL1

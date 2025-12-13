@@ -1,0 +1,36 @@
+{
+  "name": "FT6336U_HardI2C",
+  "version": "1.0.0",
+  "description": "Hardware I2C driver for FT6336U capacitive touch controller, supporting up to 2 touch points",
+  "keywords": "touch, i2c, ft6336u, capacitive, amb82-mini",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/FT6336U_HardI2C.git"
+  },
+  "authors": [
+    {
+      "name": "Your Name",
+      "email": "your.email@example.com",
+      "url": "https://github.com/yourusername"
+    }
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/yourusername/FT6336U_HardI2C",
+  "frameworks": "arduino",
+  "platforms": ["amb82-mini", "arduino"],
+  "headers": "FT6336U_HardI2C.h",
+  "dependencies": [
+    {
+      "name": "Wire",
+      "version": ">=1.0.0"
+    }
+  ],
+  "export": {
+    "exclude": [
+      "test",
+      "*.md",
+      "LICENSE",
+      "*.json"
+    ]
+  }
+}
