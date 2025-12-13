@@ -1,0 +1,40 @@
+#######################################
+# Syntax Coloring Map For FT6336U_Touch
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+FT6336U_SoftI2C	KEYWORD1
+TouchPoint	KEYWORD1
+TouchState	KEYWORD1
+TouchEvent	KEYWORD1
+TouchCallback	KEYWORD1
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+begin	KEYWORD2
+update	KEYWORD2
+getTouchCount	KEYWORD2
+getTouchPoint	KEYWORD2
+getTouchPointFull	KEYWORD2
+isTouched	KEYWORD2
+isTouchActive	KEYWORD2
+hasNewEvent	KEYWORD2
+readChipInfo	KEYWORD2
+configure	KEYWORD2
+printStatus	KEYWORD2
+testEvents	KEYWORD2
+handleInterrupt	KEYWORD2
+setTouchCallback	KEYWORD2
+setDebug	KEYWORD2
+interruptHandler	KEYWORD2
+amebaInterruptHandler	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+USE_INTERRUPT_MODE	LITERAL1
+ENABLE_DEBUG_INFO	LITERAL1
+MAX_TOUCH_POINTS	LITERAL1

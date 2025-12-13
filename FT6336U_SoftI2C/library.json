@@ -1,0 +1,22 @@
+{
+  "name": "FT6336U_SoftI2C",
+  "version": "1.0.0",
+  "description": "FT6336U电容触摸屏驱动库，支持GPIO模拟I2C和多点触摸",
+  "keywords": "touch, ft6336u, i2c, capacitive, amb82-mini",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/FT6336U_Touch.git"
+  },
+  "authors": [
+    {
+      "name": "Your Name",
+      "email": "your.email@example.com",
+      "url": "https://yourwebsite.com"
+    }
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/yourusername/FT6336U_Touch",
+  "frameworks": "arduino",
+  "platforms": ["ambd", "espressif32", "espressif8266", "ststm32"],
+  "headers": ["FT6336U_SoftI2C.h"]
+}
