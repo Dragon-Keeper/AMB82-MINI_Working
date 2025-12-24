@@ -1,0 +1,80 @@
+=== 图片处理全自动流水线使用说明 ===
+
+📁 工具位置：生成图片数组 目录
+
+📋 文件说明：
+- 自动生成配置文件.bat - 双击运行的全自动流水线批处理文件
+- auto_image_pipeline.py - 全自动流水线脚本（整合图片转换+配置生成）
+- convert_image.py - 图片转换脚本（保留，供流水线调用）
+
+🔄 全自动工作流程（一键完成）：
+
+1. 准备图片文件
+   - 将需要使用的.png图片文件放在当前目录
+   - 例如：MM.png, SM.png, NEW.png
+
+2. 双击运行批处理
+   - 双击运行 "自动生成配置文件.bat"
+   - 脚本自动完成以下所有步骤：
+     ✅ 扫描当前目录所有.png图片
+     ✅ 自动转换为.h文件格式
+     ✅ 自动生成ImageConfig.h配置文件
+
+3. 使用配置文件
+   - 将生成的 ImageConfig.h 复制到项目目录
+   - 替换原有的配置文件
+   - 重新编译 Arduino 项目
+
+🎯 全自动功能特点：
+
+✅ 智能扫描：自动识别当前目录的所有.png图片
+✅ 自动转换：无需手动运行转换脚本
+✅ 智能命名：根据图片名生成对应的宏定义
+✅ 统一格式：生成标准的 *_IMAGE_DATA, *_IMAGE_SIZE 等宏
+✅ 编码优化：支持中文Windows系统编码
+✅ 错误处理：完整的异常捕获和错误提示
+
+📊 示例：
+
+假设当前目录有：
+- MM.png
+- SM.png
+
+双击 "自动生成配置文件.bat" 后，将自动：
+1. 转换 MM.png → MM.h
+2. 转换 SM.png → SM.h
+3. 生成包含以下宏定义的ImageConfig.h：
+
+// MM图像配置 (MM.png)
+#define MM_IMAGE_DATA MM_PIC
+#define MM_IMAGE_SIZE sizeof(MM_PIC)
+#define MM_IMAGE_WIDTH MM_WIDTH
+#define MM_IMAGE_HEIGHT MM_HEIGHT
+
+// SM图像配置 (SM.png)
+#define SM_IMAGE_DATA SM_PIC
+#define SM_IMAGE_SIZE sizeof(SM_PIC)
+#define SM_IMAGE_WIDTH SM_WIDTH
+#define SM_IMAGE_HEIGHT SM_HEIGHT
+
+🔧 可删除的旧文件：
+
+以下文件功能已被整合，可以安全删除：
+- auto_generate_config.py - 功能已整合到auto_image_pipeline.py
+- 运行我转换格式.bat - 功能已整合到全自动流水线
+
+⚠️ 注意事项：
+
+• 确保Python已安装并添加到PATH环境变量
+• 生成的ImageConfig.h需要复制到项目目录使用
+• 每次添加新图片后，重新双击批处理文件即可
+• 系统已优化编码处理，支持中文Windows环境
+
+📞 故障排除：
+
+如果遇到问题：
+1. 检查Python是否安装：在命令提示符输入 "python --version"
+2. 确保.png图片文件存在且格式正确
+3. 查看错误信息，根据提示进行修复
+
+这个工具实现了真正的"一劳永逸"解决方案，每次只需要双击批处理文件即可完成从图片到配置的完整流程！
