@@ -1,0 +1,20 @@
+任务完成总结：
+
+1. 标准化注释格式：
+   - 修改了 convert_image.py，确保生成的头文件使用标准化块注释
+   - 注释包含文件用途、核心功能和开发阶段
+
+2. 文件命名规范：
+   - 将 MM.h 重命名为 Menu_MM.h
+   - 将 SM.h 重命名为 Menu_SM.h
+   - 将 ImageConfig.h 重命名为 Camera_ImageConfig.h
+   - 更新了 auto_image_pipeline.py 以生成正确的文件名
+
+3. 配置文件更新：
+   - 生成了 Camera_ImageConfig.h，统一管理所有图像变量名
+   - 添加了标准化注释
+
+4. 清理工作：
+   - 删除了旧的 MM.h 和 SM.h 文件
+
+所有修改都已完成，文件结构和格式现在与 examples\Camera 目录保持一致，符合项目文档标准和工作原理。
