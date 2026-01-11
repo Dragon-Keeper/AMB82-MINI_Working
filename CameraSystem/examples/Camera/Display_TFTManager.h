@@ -53,8 +53,14 @@ public:
     // 状态检查
     bool isInitialized() const;
     
+    // 颜色顺序控制
+    void setColorOrder(bool rgbOrder);
+    
     // 背光控制
     void setBacklight(bool enabled);
+    
+    // 资源清理
+    void cleanup();
     
 private:
     AmebaST7789_DMA_SPI1 m_tft;  // TFT显示对象

@@ -8,6 +8,7 @@
  */
 
 #include <Arduino.h>
+#include <Wire.h>
 #include "Display_AmebaST7789_DMA_SPI1.h"
 #include "Menu_MenuManager.h"
 #include "VideoStream.h"
@@ -76,6 +77,18 @@ void handleEncoderButton();
 #include "System_ResourceManager.h"
 #include "System_ConfigManager.h"
 
+// 包含DS1307时钟模块头文件
+#include "DS1307_ClockModule.h"
+
+// 时间更新开关：设置为1时，刷入固件会更新DS1307时间；设置为0时，不会更新时间
+#define UPDATE_DS1307_TIME 0 // 停止时间更新
+
+// 创建DS1307时钟模块实例
+DS1307_ClockModule clockModule;
+
+// 时间变量
+DS1307_Time currentTime;
+
 // 任务函数现在在RTOS_TaskFactory.cpp中实现
 
 MenuManager menuManager(tftManager);
@@ -110,6 +123,37 @@ int JPEGDraw(JPEGDRAW *pDraw) {
 }
 
 void setup() {
+    // 初始化串口
+    Serial.begin(115200);
+    
+    // 初始化DS1307时钟模块
+    if (clockModule.initialize()) {
+        Serial.println("DS1307时钟模块初始化成功");
+    } else {
+        Serial.println("DS1307时钟模块初始化失败");
+    }
+    
+    // 仅在UPDATE_DS1307_TIME为1时更新DS1307时间
+    #if UPDATE_DS1307_TIME
+    // 设置DS1307初始时间为2026年1月8日 12:00:00
+    DS1307_Time initTime;
+    initTime.seconds = 0;
+    initTime.minutes = 0;
+    initTime.hours = 12;
+    initTime.day = 5; // 星期五
+    initTime.date = 8;
+    initTime.month = 1;
+    initTime.year = 2026;
+    
+    if (clockModule.writeTime(initTime)) {
+        Serial.println("DS1307初始时间已设置为2026-01-08 12:00:00");
+    } else {
+        Serial.println("DS1307初始时间设置失败");
+    }
+    #else
+    Serial.println("DS1307时间更新功能已禁用");
+    #endif
+    
     // 初始化工具模块
     Utils_Logger::init(Utils_Logger::LEVEL_INFO);
     Utils_BufferManager::init();
@@ -220,7 +264,7 @@ void setup() {
     // 注册所有任务
     TaskFactory::registerTask(TaskManager::TASK_CAMERA_PREVIEW, "CameraPreview", taskCameraPreview, 1024, 1);
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_B, "FunctionB", taskFunctionB, 1024, 1);
-    TaskFactory::registerTask(TaskManager::TASK_FUNCTION_C, "FunctionC", taskFunctionC, 1024, 1);
+    TaskFactory::registerTask(TaskManager::TASK_FUNCTION_C, "FunctionC", taskFunctionC, 4096, 1); // 增加堆栈大小以避免溢出
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_D, "FunctionD", taskFunctionD, 1024, 1);
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_E, "FunctionE", taskFunctionE, 1024, 1);
     TaskFactory::registerTask(TaskManager::TASK_SYSTEM_SETTINGS, "SystemSettings", taskSystemSettings, 1024, 1);
@@ -229,9 +273,30 @@ void setup() {
     Utils_Logger::info("===================================");
 }
 
+// 用于控制时间输出频率的计数器
+unsigned long timeCounter = 0;
+
 void loop() {
     // 模块化移植：阶段四 - 使用EncoderControl类检测按钮状态
     encoder.checkButton();
+    
+    // 仅在实时预览阶段每秒读取并输出一次DS1307时间
+    if (StateManager::getInstance().getCurrentState() == STATE_CAMERA_PREVIEW) {
+        if (timeCounter++ >= 100) { // 大约每秒一次（loop每10ms执行一次）
+            timeCounter = 0;
+            
+            // 读取DS1307时间
+            bool timeValid = clockModule.readTime(currentTime);
+            
+            // 仅当时间读取成功且数据有效时，才打印时间到串口监视器
+            if (timeValid) {
+              // 使用formatTime函数格式化时间输出
+              char timeStr[20];
+              clockModule.formatTime(currentTime, timeStr, sizeof(timeStr));
+              Serial.println(timeStr);
+            }
+        }
+    }
     
     // 根据当前状态执行不同的处理逻辑
     switch (StateManager::getInstance().getCurrentState()) {
@@ -265,6 +330,13 @@ void loop() {
                     Utils_Logger::info("主菜单A位置：创建相机预览任务");
                     // 只有当任务创建成功时，才更新系统状态
                     if (TaskFactory::createDefaultTask(TaskManager::TASK_CAMERA_PREVIEW)) {
+                        StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
+                    }
+                } else if (currentMenuItem == POS_C) {
+                    // C位置按下：创建图片回放任务
+                    Utils_Logger::info("主菜单C位置：创建图片回放任务");
+                    // 只有当任务创建成功时，才更新系统状态
+                    if (TaskFactory::createDefaultTask(TaskManager::TASK_FUNCTION_C)) {
                         StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
                     }
                 } else if (currentMenuItem == POS_F) {

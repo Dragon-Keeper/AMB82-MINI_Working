@@ -180,3 +180,18 @@ MenuPageType MenuManager::getCurrentPageType() const
     }
     return static_cast<MenuPageType>(-1); // 返回无效类型
 }
+
+// 清理菜单管理器资源
+void MenuManager::cleanup()
+{
+    Utils_Logger::info("[MenuManager] 开始清理资源");
+    
+    // 重置当前页面索引
+    currentPageIndex = 0;
+    menuCount = 0;
+    
+    // 清除菜单项配置指针（不释放内存，因为由外部管理）
+    currentMenuConfig = nullptr;
+    
+    Utils_Logger::info("[MenuManager] 资源清理完成");
+}

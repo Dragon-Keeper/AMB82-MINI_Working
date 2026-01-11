@@ -58,6 +58,7 @@ public:
     const ImageBuffer& getStillBuffer() const;
 
     SDCardManager& getSDCardManager();
+    bool isInitialized() const; // 新增方法：检查相机管理器是否已初始化
 
 private:
     Display_TFTManager* m_tftManager;

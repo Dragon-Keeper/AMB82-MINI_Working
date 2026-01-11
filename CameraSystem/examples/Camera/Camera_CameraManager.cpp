@@ -25,6 +25,9 @@ static int CameraManager_JPEGDraw(JPEGDRAW *pDraw) {
 // SD卡管理器实例（在Camera.ino中定义）
 extern SDCardManager sdCardManager;
 
+// DS1307时钟模块实例（在Camera.ino中定义）
+extern DS1307_ClockModule clockModule;
+
 CameraManager::CameraManager()
     : m_tftManager(nullptr)
     , m_fontRenderer(nullptr)
@@ -78,6 +81,12 @@ void CameraManager::cleanup() {
     if (m_previewActive) {
         stopPreview();
     }
+    
+    // 清理SD卡资源
+    if (m_sdCardManager != nullptr) {
+        m_sdCardManager->cleanup();
+    }
+    
     m_initialized = false;
 }
 
@@ -136,13 +145,33 @@ void CameraManager::processPreviewFrame() {
         return;
     }
 
+    // 添加超时处理的相机图像获取
+    uint32_t startTime = Utils_Timer::getCurrentTime();
+    const uint32_t TIMEOUT_MS = 200; // 200ms超时
+    
     Camera.getImage(CHANNEL_PREVIEW, &m_previewBuffer.imgAddr, &m_previewBuffer.imgLen);
+    
+    // 检查是否超时
+    if (Utils_Timer::getCurrentTime() - startTime > TIMEOUT_MS) {
+        Utils_Logger::info("Camera.getImage timeout in preview");
+        m_previewBuffer.imgLen = 0;
+        return;
+    }
 
     if (m_previewBuffer.imgLen > 0) {
+        startTime = Utils_Timer::getCurrentTime();
+        
         if (m_jpegDecoder->openFLASH((uint8_t *)m_previewBuffer.imgAddr, m_previewBuffer.imgLen, CameraManager_JPEGDraw)) {
-                m_jpegDecoder->decode(0, 0, JPEG_SCALE_HALF);
+            // 添加JPEG解码超时检查
+            if (Utils_Timer::getCurrentTime() - startTime > TIMEOUT_MS) {
+                Utils_Logger::info("JPEG decode timeout");
                 m_jpegDecoder->close();
+                return;
             }
+            
+            m_jpegDecoder->decode(0, 0, JPEG_SCALE_HALF);
+            m_jpegDecoder->close();
+        }
     }
 
     // 将拍照请求检查移到任务循环中，减少预览帧处理的延迟
@@ -157,31 +186,87 @@ bool CameraManager::capturePhoto() {
     m_isCapturing = true;
     Utils_Logger::info(">>> Starting photo capture");
 
+    const uint32_t TIMEOUT_MS = 5000; // 5秒总超时
+    uint32_t startTime = Utils_Timer::getCurrentTime();
+
     Camera.channelBegin(CHANNEL_STILL);
     Utils_Logger::info("  1. Still channel opened");
-    Utils_Timer::delayMs(200);
+    
+    // 带超时检查的延迟
+    uint32_t delayStartTime = Utils_Timer::getCurrentTime();
+    while (Utils_Timer::getCurrentTime() - delayStartTime < 200) {
+        // 检查总超时
+        if (Utils_Timer::getCurrentTime() - startTime > TIMEOUT_MS) {
+            Utils_Logger::error("Capture timeout during delay");
+            goto capture_cleanup;
+        }
+        vTaskDelay(1); // 让出CPU
+    }
 
+    // 带超时的图像获取
+    startTime = Utils_Timer::getCurrentTime();
     Camera.getImage(CHANNEL_STILL, &m_stillBuffer.imgAddr, &m_stillBuffer.imgLen);
+    
+    if (Utils_Timer::getCurrentTime() - startTime > TIMEOUT_MS) {
+        Utils_Logger::error("Camera.getImage timeout during capture");
+        m_stillBuffer.imgLen = 0;
+        goto capture_cleanup;
+    }
 
     if (m_stillBuffer.imgLen > 0) {
         Utils_Logger::info("  2. Image captured successfully, size: %d bytes", m_stillBuffer.imgLen);
 
+        startTime = Utils_Timer::getCurrentTime();
         if (savePhotoToSDCard(m_stillBuffer.imgAddr, m_stillBuffer.imgLen)) {
-            m_fontRenderer->showCameraStatus(m_fontRenderer->getPhotoSuccessString(), 120, 150);
-            Utils_Timer::delayMs(500);
+            // 显示中文成功提示
+            int centerX = m_fontRenderer->calculateCenterPosition(240, m_fontRenderer->getPhotoSuccessString());
+            m_fontRenderer->drawChineseString(centerX, 150, m_fontRenderer->getPhotoSuccessString(), ST7789_WHITE, ST7789_BLACK);
+            
+            // 带超时检查的显示延迟
+            delayStartTime = Utils_Timer::getCurrentTime();
+            while (Utils_Timer::getCurrentTime() - delayStartTime < 500) {
+                if (Utils_Timer::getCurrentTime() - startTime > TIMEOUT_MS) {
+                    Utils_Logger::error("Timeout during success display");
+                    break;
+                }
+                vTaskDelay(1);
+            }
             m_tftManager->fillRectangle(80, 150, 160, 16, ST7789_BLACK);
         } else {
-            m_fontRenderer->showCameraStatus(m_fontRenderer->getSaveFailedString(), 80, 150);
-            Utils_Timer::delayMs(1000);
+            // 显示中文保存失败提示
+            int centerX = m_fontRenderer->calculateCenterPosition(240, m_fontRenderer->getSaveFailedString());
+            m_fontRenderer->drawChineseString(centerX, 150, m_fontRenderer->getSaveFailedString(), ST7789_WHITE, ST7789_BLACK);
+            
+            // 带超时检查的显示延迟
+            delayStartTime = Utils_Timer::getCurrentTime();
+            while (Utils_Timer::getCurrentTime() - delayStartTime < 1000) {
+                if (Utils_Timer::getCurrentTime() - startTime > TIMEOUT_MS) {
+                    Utils_Logger::error("Timeout during failure display");
+                    break;
+                }
+                vTaskDelay(1);
+            }
             m_tftManager->fillRectangle(80, 150, 160, 16, ST7789_BLACK);
         }
     } else {
         Utils_Logger::error("  2. Error: Failed to capture image data");
-        m_fontRenderer->showCameraStatus(m_fontRenderer->getCaptureFailedString(), 60, 150);
-        Utils_Timer::delayMs(1000);
+        // 显示中文捕获失败提示
+        int centerX = m_fontRenderer->calculateCenterPosition(240, m_fontRenderer->getCaptureFailedString());
+        m_fontRenderer->drawChineseString(centerX, 150, m_fontRenderer->getCaptureFailedString(), ST7789_WHITE, ST7789_BLACK);
+        
+        // 带超时检查的显示延迟
+        delayStartTime = Utils_Timer::getCurrentTime();
+        while (Utils_Timer::getCurrentTime() - delayStartTime < 1000) {
+            if (Utils_Timer::getCurrentTime() - startTime > TIMEOUT_MS) {
+                Utils_Logger::error("Timeout during error display");
+                break;
+            }
+            vTaskDelay(1);
+        }
         m_tftManager->fillRectangle(60, 150, 200, 16, ST7789_BLACK);
     }
 
+capture_cleanup:
     Camera.channelEnd(CHANNEL_STILL);
     Utils_Logger::info("  3. Still channel closed");
 
@@ -201,9 +286,29 @@ bool CameraManager::savePhotoToSDCard(uint32_t imgAddr, uint32_t imgLen) {
     char filename[50];
     m_sdCardManager->generatePhotoFileName(filename, sizeof(filename));
 
+    // 从DS1307模块获取当前时间，用于设置文件最后修改时间
+    DS1307_Time captureTime;
+    bool timeSuccess = clockModule.readTime(captureTime);
+    
+    if (!timeSuccess) {
+        Utils_Logger::error("Failed to read capture time from DS1307");
+        // 如果读取失败，使用默认时间
+        captureTime = {0, 0, 0, 1, 1, 1, 2026};
+    }
+
     Utils_Logger::info("Saving to: %s", filename);
 
-    int32_t bytesWritten = m_sdCardManager->writeFile(filename, (uint8_t *)imgAddr, imgLen);
+    // 添加SD卡写入超时处理
+    const uint32_t TIMEOUT_MS = 3000; // 3秒超时
+    uint32_t startTime = Utils_Timer::getCurrentTime();
+    
+    // 写入文件并设置最后修改时间
+    int32_t bytesWritten = m_sdCardManager->writeFile(filename, (uint8_t *)imgAddr, imgLen, &captureTime);
+    
+    if (Utils_Timer::getCurrentTime() - startTime > TIMEOUT_MS) {
+        Utils_Logger::error("SD card write timeout");
+        return false;
+    }
 
     if (bytesWritten == (int32_t)imgLen) {
         Utils_Logger::info("Save successful! Wrote %d bytes", bytesWritten);
@@ -236,6 +341,10 @@ void CameraManager::requestCapture() {
 
 void CameraManager::clearCaptureRequest() {
     m_captureRequested = false;
+}
+
+bool CameraManager::isInitialized() const {
+    return m_initialized;
 }
 
 const CameraManager::ImageBuffer& CameraManager::getPreviewBuffer() const {

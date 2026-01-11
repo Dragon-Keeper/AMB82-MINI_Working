@@ -18,9 +18,9 @@
 // ===============================================
 // EC11旋转编码器引脚定义
 // ===============================================
-#define ENCODER_CLK 7
-#define ENCODER_DT  8  
-#define ENCODER_SW  9
+#define ENCODER_CLK 7   //这三个引脚与EC11旋转编码器的GND
+#define ENCODER_DT  8   //引脚直接都并联上10nF的陶瓷电容，
+#define ENCODER_SW  14  //可以减少抖动
 
 // ===============================================
 // 相机通道与配置定义
@@ -38,12 +38,15 @@
 #define EVENT_TASK_E_REQUESTED    (1 << 4)
 #define EVENT_TASK_F_REQUESTED    (1 << 5)
 #define EVENT_RETURN_TO_MENU      (1 << 6)
-#define EVENT_ALL_TASKS_CLEAR     (0x7F) // 清除所有任务事件（包括RETURN_TO_MENU）
+#define EVENT_NEXT_PHOTO          (1 << 7)  // 显示下一张照片
+#define EVENT_PREVIOUS_PHOTO      (1 << 8)  // 显示上一张照片
+#define EVENT_ALL_TASKS_CLEAR     (0x1FF) // 清除所有任务事件（更新为包含新的照片导航事件）
 
 // ===============================================
 // 系统常量定义
 // ===============================================
 #define BUTTON_DEBOUNCE_DELAY 50  // 按钮消抖延迟（毫秒）
+#define ENCODER_ROTATION_DEBOUNCE_DELAY 100  // 旋转编码器旋转消抖延迟（毫秒）
 #define CAM_FPS 30                // 相机帧率设置（帧/秒）
 
 // ===============================================

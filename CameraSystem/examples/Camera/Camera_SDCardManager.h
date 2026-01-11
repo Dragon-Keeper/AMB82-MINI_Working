@@ -9,6 +9,7 @@
 
 #include <Arduino.h>
 #include "AmebaFatFS.h"
+#include "DS1307_ClockModule.h"
 
 class SDCardManager {
 public:
@@ -31,7 +32,8 @@ public:
     bool deleteFile(const char* path);
     bool renameFile(const char* oldPath, const char* newPath);
 
-    int32_t writeFile(const char* path, const uint8_t* data, uint32_t size);
+    // 写入文件，可选参数指定文件最后修改时间
+    int32_t writeFile(const char* path, const uint8_t* data, uint32_t size, const DS1307_Time* time = nullptr);
     int32_t readFile(const char* path, uint8_t* buffer, uint32_t bufferSize);
 
     bool createDirectory(const char* path);
@@ -39,6 +41,10 @@ public:
 
     bool getStorageInfo(StorageInfo* info);
     char* getRootPath();
+
+    // 设置文件最后修改时间
+    bool setLastModTime(const char* path, uint16_t year, uint16_t month, uint16_t day, uint16_t hour, uint16_t minute, uint16_t second);
+    bool setLastModTime(const char* path, const DS1307_Time& time);
 
     char* generatePhotoFileName(char* buffer, uint32_t bufferSize);
     char* generateTimestampFileName(char* buffer, uint32_t bufferSize, const char* extension);

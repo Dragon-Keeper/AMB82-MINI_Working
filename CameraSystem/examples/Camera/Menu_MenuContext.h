@@ -83,6 +83,9 @@ public:
     
     // 切换回主菜单
     void switchToMainMenu();
+    
+    // 清理菜单上下文资源
+    void cleanup();
 };
 
 #endif // MENU_MENU_CONTEXT_H

@@ -22,6 +22,7 @@ bool Display_TFTManager::begin() {
     
     // 配置TFT显示参数
     m_tft.setRotation(1);
+    m_tft.setColorOrder(true); // 设置为RGB模式，与JPEG解码器匹配
     m_tft.fillScreen(ST7789_BLACK);
     
     // 设置默认文本属性
@@ -110,8 +111,27 @@ bool Display_TFTManager::isInitialized() const {
     return m_initialized;
 }
 
+void Display_TFTManager::setColorOrder(bool rgbOrder) {
+    if (!m_initialized) return;
+    m_tft.setColorOrder(rgbOrder);
+}
+
 void Display_TFTManager::setBacklight(bool enabled) {
     // 初始化TFT背光引脚
     pinMode(TFT_BL, OUTPUT);
     digitalWrite(TFT_BL, enabled ? HIGH : LOW);
+}
+
+void Display_TFTManager::cleanup() {
+    if (m_initialized) {
+        Utils_Logger::info("Cleaning up TFT manager");
+        
+        // 关闭背光
+        setBacklight(false);
+        
+        // 清空屏幕
+        m_tft.fillScreen(ST7789_BLACK);
+        
+        m_initialized = false;
+    }
 }

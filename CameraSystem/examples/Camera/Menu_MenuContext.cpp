@@ -21,7 +21,7 @@ void handleEncoderRotation(RotationDirection direction) {
     unsigned long currentTime = Utils_Timer::getCurrentTime();
     
     // 严格的软件消抖：确保两次旋转事件之间有足够的时间间隔
-    if (currentTime - lastValidRotation > 300) { // 300ms消抖（增加消抖时间）
+    if (currentTime - lastValidRotation > ENCODER_ROTATION_DEBOUNCE_DELAY) { // 使用宏定义的消抖时间
         lastValidRotation = currentTime;
         
         // 根据当前系统状态处理旋转事件
@@ -40,12 +40,23 @@ void handleEncoderRotation(RotationDirection direction) {
                 break;
                 
             case STATE_CAMERA_PREVIEW:
-                // 相机预览模式：旋转返回主菜单
-                Utils_Logger::info("相机预览模式：检测到旋转事件，准备返回主菜单");
-                
-                // 设置返回主菜单事件
-                TaskManager::setEvent(EVENT_RETURN_TO_MENU);
-                Utils_Logger::info("相机预览模式：已设置返回主菜单事件");
+                // 根据当前运行的任务类型区分处理逻辑
+                if (TaskManager::getTaskState(TaskManager::TASK_CAMERA_PREVIEW) == TASK_STATE_RUNNING) {
+                    // 相机预览模式(A位置)：旋转旋钮返回主菜单
+                    Utils_Logger::info("相机预览模式：旋转旋钮 - 返回主菜单");
+                    TaskManager::setEvent(EVENT_RETURN_TO_MENU);
+                } else if (TaskManager::getTaskState(TaskManager::TASK_FUNCTION_C) == TASK_STATE_RUNNING) {
+                    // 回放模式(C位置)：旋钮控制照片导航
+                    if (direction == ROTATION_CW) {
+                        // 顺时针旋转：下一张照片
+                        Utils_Logger::info("回放模式：顺时针旋转 - 显示下一张照片");
+                        TaskManager::setEvent(EVENT_NEXT_PHOTO);
+                    } else if (direction == ROTATION_CCW) {
+                        // 逆时针旋转：上一张照片
+                        Utils_Logger::info("回放模式：逆时针旋转 - 显示上一张照片");
+                        TaskManager::setEvent(EVENT_PREVIOUS_PHOTO);
+                    }
+                }
                 break;
                 
             default:
@@ -71,10 +82,15 @@ void handleEncoderButton() {
             break;
             
         case STATE_CAMERA_PREVIEW:
-            // 在相机预览模式下，设置手动拍照请求 - 模块化移植：阶段五 - 使用CameraManager
-            if (!cameraManager.isCapturing()) {
+            // 根据当前运行的任务类型区分处理逻辑
+            if (TaskManager::getTaskState(TaskManager::TASK_CAMERA_PREVIEW) == TASK_STATE_RUNNING) {
+                // 相机预览模式(A位置)：按压开关拍照
+                Utils_Logger::info("相机预览模式：按压开关 - 拍照");
                 cameraManager.requestCapture();
-                Utils_Logger::info("相机预览模式：设置手动拍照请求");
+            } else if (TaskManager::getTaskState(TaskManager::TASK_FUNCTION_C) == TASK_STATE_RUNNING) {
+                // 回放模式(C位置)：按压开关返回主菜单
+                Utils_Logger::info("回放模式：按压开关 - 返回主菜单");
+                TaskManager::setEvent(EVENT_RETURN_TO_MENU);
             }
             break;
             
@@ -330,4 +346,20 @@ void MenuContext::switchToMainMenu() {
     showMenu();
     
     Utils_Logger::info("已切换回主菜单");
+}
+
+// 清理菜单上下文资源
+void MenuContext::cleanup() {
+    Utils_Logger::info("[MenuContext] 开始清理资源");
+    
+    // 重置菜单状态
+    reset();
+    
+    // 清理菜单管理器资源
+    menuManager.cleanup();
+    
+    // 将系统状态设置为主菜单
+    StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
+    
+    Utils_Logger::info("[MenuContext] 资源清理完成");
 }

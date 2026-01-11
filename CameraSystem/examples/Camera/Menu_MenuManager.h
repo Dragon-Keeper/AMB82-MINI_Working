@@ -74,6 +74,9 @@ public:
     
     // 获取当前页面类型
     MenuPageType getCurrentPageType() const;
+    
+    // 清理菜单管理器资源
+    void cleanup();
 };
 
 #endif // MENU_MANAGER_H
