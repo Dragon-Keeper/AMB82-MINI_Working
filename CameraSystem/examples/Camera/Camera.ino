@@ -9,6 +9,9 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
+#include <NTPClient.h>
 #include "Display_AmebaST7789_DMA_SPI1.h"
 #include "Menu_MenuManager.h"
 #include "VideoStream.h"
@@ -59,6 +62,42 @@
 // 相机通道与配置定义
 VideoSetting configPreview(VIDEO_VGA, CAM_FPS, VIDEO_JPEG, 1);
 VideoSetting configStill(VIDEO_HD, CAM_FPS, VIDEO_JPEG, 1);
+
+// WiFi网络配置
+#define WIFI_CONFIG_COUNT 2
+struct WiFiConfig {
+  char ssid[20];
+  char password[20];
+};
+
+WiFiConfig wifiConfigs[WIFI_CONFIG_COUNT] = {
+  {"Force", "dd123456"},
+  {"Tiger", "Dt5201314"}
+};
+
+// 将IPAddress转换为字符串的辅助函数
+String ipToString(IPAddress ip) {
+  return String(ip[0]) + "." + String(ip[1]) + "." + String(ip[2]) + "." + String(ip[3]);
+}
+
+// 国内NTP服务器列表（优先核心组，后备用组）
+String ntpServers[] = {
+  "time1.aliyun.com",
+  "ntp.ntsc.ac.cn",
+  "time2.aliyun.com",
+  "ntp1.ntsc.ac.cn",
+  "time3.aliyun.com",
+  "ntp.10086.cn",
+  "ntp.ctyun.com",
+  "s1a.time.edu.cn",
+  "ntp.unicom.com.cn"
+};
+// 服务器数量（自动计算，避免手动修改）
+int ntpServerCount = sizeof(ntpServers) / sizeof(ntpServers[0]);
+
+// NTP配置
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP);
 
 // 全局对象 - 使用TFT管理器
 Display_TFTManager tftManager;
@@ -157,6 +196,8 @@ void setup() {
     // 初始化工具模块
     Utils_Logger::init(Utils_Logger::LEVEL_INFO);
     Utils_BufferManager::init();
+    
+
     
     // 初始化资源管理器
     Utils_Logger::info("初始化资源管理器...");
@@ -268,6 +309,15 @@ void setup() {
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_D, "FunctionD", taskFunctionD, 1024, 1);
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_E, "FunctionE", taskFunctionE, 1024, 1);
     TaskFactory::registerTask(TaskManager::TASK_SYSTEM_SETTINGS, "SystemSettings", taskSystemSettings, 1024, 1);
+    TaskFactory::registerTask(TaskManager::TASK_TIME_SYNC, "TimeSync", taskTimeSync, 2048, 1); // 注册后台校时任务
+    
+    // 创建后台校时任务
+    Utils_Logger::info("创建后台校时任务...");
+    if (TaskFactory::createDefaultTask(TaskManager::TASK_TIME_SYNC)) {
+        Utils_Logger::info("后台校时任务创建成功");
+    } else {
+        Utils_Logger::error("后台校时任务创建失败");
+    }
     
     Utils_Logger::info("系统初始化完成，等待用户交互...");
     Utils_Logger::info("===================================");
@@ -276,25 +326,159 @@ void setup() {
 // 用于控制时间输出频率的计数器
 unsigned long timeCounter = 0;
 
+// 后台校时任务函数
+void taskTimeSync(void* parameters) {
+    Utils_Logger::info("后台校时任务启动");
+    
+    bool wifiConnected = false;
+    const int MAX_RETRIES = 5;
+    const int RETRY_DELAY = 3000; // 3秒重试间隔
+    
+    // 尝试连接WiFi网络
+    for (int i = 0; i < WIFI_CONFIG_COUNT; i++) {
+        if (wifiConnected) break;
+        
+        Utils_Logger::info("尝试连接WiFi网络: %s", wifiConfigs[i].ssid);
+        
+        WiFi.begin(wifiConfigs[i].ssid, wifiConfigs[i].password);
+        
+        for (int retry = 0; retry < MAX_RETRIES; retry++) {
+            if (WiFi.status() == WL_CONNECTED) {
+                // 等待获取有效的IP地址
+                int ipWaitCount = 0;
+                const int MAX_IP_WAIT = 10;
+                const int IP_WAIT_DELAY = 1000; // 1秒
+                
+                while (WiFi.localIP() == IPAddress(0, 0, 0, 0) && ipWaitCount < MAX_IP_WAIT) {
+                    Utils_Logger::info("等待获取IP地址... %d/%d", ipWaitCount + 1, MAX_IP_WAIT);
+                    vTaskDelay(IP_WAIT_DELAY / portTICK_PERIOD_MS);
+                    ipWaitCount++;
+                }
+                
+                if (WiFi.localIP() != IPAddress(0, 0, 0, 0)) {
+                    Utils_Logger::info("成功连接到WiFi网络: %s", wifiConfigs[i].ssid);
+                    Utils_Logger::info("IP地址: %s", ipToString(WiFi.localIP()).c_str());
+                    wifiConnected = true;
+                    break;
+                } else {
+                    Utils_Logger::info("WiFi连接成功但未获取到IP地址");
+                    // 重置WiFi状态，继续尝试
+                    WiFi.disconnect();
+                    vTaskDelay(RETRY_DELAY / portTICK_PERIOD_MS);
+                }
+            } else {
+                Utils_Logger::info("连接中... 尝试 %d/%d", retry + 1, MAX_RETRIES);
+                vTaskDelay(RETRY_DELAY / portTICK_PERIOD_MS);
+            }
+        }
+    }
+    
+    if (wifiConnected) {
+        // 获取NTP时间
+        Utils_Logger::info("获取NTP时间...");
+        bool ntpSync = false;
+        const int NTP_MAX_RETRIES = 3;
+        const int NTP_TIMEOUT = 2000; // 2秒超时
+        
+        // 遍历国内NTP服务器列表
+        for (int serverIndex = 0; serverIndex < ntpServerCount; serverIndex++) {
+            if (ntpSync) break;
+            
+            String currentServer = ntpServers[serverIndex];
+            Utils_Logger::info("尝试使用NTP服务器: %s", currentServer.c_str());
+            
+            // 初始化NTP客户端
+            timeClient.setPoolServerName(currentServer.c_str());
+            timeClient.setTimeOffset(8 * 3600); // 设置时区为UTC+8（中国标准时间）
+            timeClient.setUpdateInterval(60000); // 设置更新间隔为60秒
+            timeClient.begin();
+            
+            // 尝试多次获取时间
+            for (int retry = 0; retry < NTP_MAX_RETRIES; retry++) {
+                if (timeClient.update()) {
+                    Utils_Logger::info("NTP时间同步成功，使用服务器: %s", currentServer.c_str());
+                    Utils_Logger::info("当前时间: %s", timeClient.getFormattedTime().c_str());
+                    Utils_Logger::info("当前日期: %s", timeClient.getFormattedDate().c_str());
+                    ntpSync = true;
+                    
+                    // 校准DS1307时钟
+                    DS1307_Time ntpTime;
+                    ntpTime.seconds = timeClient.getSeconds();
+                    ntpTime.minutes = timeClient.getMinutes();
+                    ntpTime.hours = timeClient.getHours();
+                    ntpTime.day = timeClient.getDay() + 1; // NTPClient返回0-6，DS1307需要1-7
+                    ntpTime.date = timeClient.getMonthDay();
+                    ntpTime.month = timeClient.getMonth();
+                    ntpTime.year = timeClient.getYear();
+                    
+                    Utils_Logger::info("校准DS1307时钟...");
+                    if (clockModule.writeTime(ntpTime)) {
+                        Utils_Logger::info("DS1307时钟校准成功");
+                        
+                        // 读取校准后的时间进行验证（已屏蔽输出，避免显示错误信息）
+                        DS1307_Time calibratedTime;
+                        if (clockModule.readTime(calibratedTime)) {
+                            // 不输出校准后的时间，因为可能存在I2C通信延迟导致的显示错误
+                        }
+                    } else {
+                        Utils_Logger::error("DS1307时钟校准失败");
+                    }
+                    
+                    break;
+                }
+                
+                Utils_Logger::info("NTP时间同步中... 服务器: %s, 尝试 %d/%d", currentServer.c_str(), retry + 1, NTP_MAX_RETRIES);
+                vTaskDelay(NTP_TIMEOUT / portTICK_PERIOD_MS); // 2秒后重试
+            }
+        }
+        
+        if (!ntpSync) {
+            Utils_Logger::error("NTP时间同步失败，已尝试所有国内服务器");
+        }
+        
+        // 断开WiFi连接以节省资源
+        Utils_Logger::info("断开WiFi连接以节省资源");
+        WiFi.disconnect();
+    } else {
+        Utils_Logger::error("无法连接到任何WiFi网络");
+    }
+    
+    Utils_Logger::info("后台校时任务完成");
+    vTaskDelete(NULL); // 删除任务
+}
+
 void loop() {
     // 模块化移植：阶段四 - 使用EncoderControl类检测按钮状态
     encoder.checkButton();
     
-    // 仅在实时预览阶段每秒读取并输出一次DS1307时间
-    if (StateManager::getInstance().getCurrentState() == STATE_CAMERA_PREVIEW) {
-        if (timeCounter++ >= 100) { // 大约每秒一次（loop每10ms执行一次）
-            timeCounter = 0;
-            
-            // 读取DS1307时间
-            bool timeValid = clockModule.readTime(currentTime);
-            
-            // 仅当时间读取成功且数据有效时，才打印时间到串口监视器
-            if (timeValid) {
-              // 使用formatTime函数格式化时间输出
-              char timeStr[20];
-              clockModule.formatTime(currentTime, timeStr, sizeof(timeStr));
-              Serial.println(timeStr);
+    // DS1307时间读取与计数功能控制开关
+    // 开关状态可通过修改DS1307_TIME_READ_ENABLED宏来控制（1:启用, 0:禁用）
+    if (DS1307_TIME_READ_ENABLED) {
+        // 仅在非实时预览阶段每秒读取并输出一次DS1307时间，以提高预览帧率
+        if (StateManager::getInstance().getCurrentState() != STATE_CAMERA_PREVIEW) {
+            if (timeCounter >= 100) { // 大约每1秒一次（loop每10ms执行一次）
+                timeCounter = 0;
+                
+                // 读取DS1307时间
+                bool timeValid = clockModule.readTime(currentTime);
+                
+                // 仅当时间读取成功且数据有效时，才打印时间到串口监视器
+                if (timeValid) {
+                  // 使用formatTime函数格式化时间输出
+                  char timeStr[20];
+                  clockModule.formatTime(currentTime, timeStr, sizeof(timeStr));
+                  Serial.println(timeStr);
+                }
+            } else {
+                timeCounter++;
             }
+        }
+    } else {
+        // 开关关闭时的状态指示，仅在首次进入loop时输出一次
+        static bool firstTime = true;
+        if (firstTime) {
+            Utils_Logger::info("DS1307时间读取与计数功能已禁用");
+            firstTime = false;
         }
     }
     

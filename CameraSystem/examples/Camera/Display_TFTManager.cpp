@@ -38,7 +38,7 @@ bool Display_TFTManager::begin() {
 void Display_TFTManager::initSPI() {
     // 配置SPI通信参数
     SPI1.setDataMode(TFT_CS, SPI_MODE0, SPI_MODE_MASTER);
-    SPI1.setDefaultFrequency(25000000);
+    SPI1.setDefaultFrequency(40000000); // 提高SPI显示频率以加快渲染速度
     SPI1.begin();
 }
 

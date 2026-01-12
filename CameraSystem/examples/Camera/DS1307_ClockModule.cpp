@@ -109,19 +109,19 @@ bool DS1307_ClockModule::writeTime(const DS1307_Time &time) {
     Serial.print("年: "); Serial.print(time.year - 2000); Serial.print(" -> "); Serial.print(decToBcd(time.year - 2000), HEX); Serial.println();
     
     // 准备写入的数据（十进制转BCD）
-    uint8_t buffer[8];
-    buffer[0] = DS1307_REG_SECONDS; // 起始寄存器地址
-    buffer[1] = decToBcd(time.seconds);
-    buffer[2] = decToBcd(time.minutes);
-    buffer[3] = decToBcd(time.hours);
-    buffer[4] = decToBcd(time.day);
-    buffer[5] = decToBcd(time.date);
-    buffer[6] = decToBcd(time.month);
-    buffer[7] = decToBcd(time.year - 2000); // 年份只存储后两位
+    uint8_t buffer[7];
+    buffer[0] = decToBcd(time.seconds) & 0x7F; // 清除时钟停止位（BIT7），确保时钟运行
+    buffer[1] = decToBcd(time.minutes);
+    buffer[2] = decToBcd(time.hours) & 0x3F; // 确保使用24小时制（清除12/24小时制选择位和上午/下午位）
+    buffer[3] = decToBcd(time.day);
+    buffer[4] = decToBcd(time.date);
+    buffer[5] = decToBcd(time.month);
+    buffer[6] = decToBcd(time.year - 2000); // 年份只存储后两位
     
     // 写入DS1307
     Wire1.beginTransmission((uint8_t)DS1307_ADDRESS);
-    for (uint8_t i = 0; i < 8; i++) {
+    Wire1.write(DS1307_REG_SECONDS); // 起始寄存器地址
+    for (uint8_t i = 0; i < 7; i++) {
         Wire1.write(buffer[i]);
     }
     uint8_t error = Wire1.endTransmission();

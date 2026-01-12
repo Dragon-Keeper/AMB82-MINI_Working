@@ -51,17 +51,21 @@
 - 解决SD卡读写冲突，确保功能稳定
 
 ### 系统管理
-- FreeRTOS多任务架构，支持任务优先级管理
-- 模块化设计，易于扩展和维护
-- 完善的错误处理和日志系统，支持分级日志输出
+- FreeRTOS多任务架构
+- 模块化设计，易于扩展
+- 完善的错误处理和日志系统
 - DS1307实时时钟模块集成
   - 系统启动时自动设置初始时间
   - 通过串口监视器输出实时秒数
   - 支持固件刷写时保护时钟不被重置
   - 硬件I2C通信，稳定可靠
-- 系统配置管理，支持配置项的持久化存储
-- 系统资源管理，优化内存和资源分配
-- 系统状态管理，实现状态机控制
+  - 支持时间读取控制开关，可通过宏定义灵活启用/禁用
+- NTP网络时间同步功能
+  - 支持国内NTP服务器列表轮询（阿里云、中国科学院等）
+  - 在子菜单A位置启动后台校时任务
+  - 自动连接WiFi并获取网络时间
+  - 校准DS1307实时时钟
+  - 完成后自动断开WiFi连接以节省资源
 
 ## 系统架构
 
@@ -130,11 +134,8 @@
 
 ### 位置E：设置菜单
 - 进入系统设置子菜单
-- 调整相机参数（分辨率、质量等）
-- 设置显示选项（亮度、对比度等）
-- 调整编码器灵敏度
-- 设置系统超时时间
-- 管理系统配置
+- 调整相机参数
+- 设置显示选项
 
 ### 位置F：关于信息
 - 显示系统版本信息
@@ -145,64 +146,20 @@
 
 ```
 Camera/
-├── Camera.ino                           # 主程序入口
-├── README.md                            # 项目说明文档
-├── Shared_GlobalDefines.h               # 全局定义
-├── Shared_Types.h                       # 共享数据类型
-├── Shared_SharedResources.h             # 共享资源
-├── Menu_MenuContext.cpp                 # 菜单上下文管理
-├── Menu_MenuContext.h                   # 菜单上下文管理头文件
-├── Menu_MenuManager.cpp                 # 菜单管理器
-├── Menu_MenuManager.h                   # 菜单管理器头文件
-├── Menu_MenuItems.cpp                   # 菜单项管理
-├── Menu_MenuItems.h                     # 菜单项管理头文件
-├── MenuPages.cpp                        # 菜单页面数据
-├── MenuPages.h                          # 菜单页面数据头文件
-├── Menu_TriangleController.cpp          # 三角形光标控制器
-├── Menu_TriangleController.h            # 三角形光标控制器头文件
-├── Menu_MM.h                            # 主菜单配置
-├── Menu_SM.h                            # 设置菜单配置
-├── Display_AmebaST7789_DMA_SPI1.cpp     # DMA SPI显示驱动
-├── Display_AmebaST7789_DMA_SPI1.h       # DMA SPI显示驱动头文件
-├── Display_AmebaST7789_SPI1.cpp         # SPI显示驱动
-├── Display_AmebaST7789_SPI1.h           # SPI显示驱动头文件
-├── Display_FontRenderer.cpp             # 字体渲染
-├── Display_FontRenderer.h               # 字体渲染头文件
-├── Display_GraphicsPrimitives.cpp       # 图形基元
-├── Display_GraphicsPrimitives.h         # 图形基元头文件
-├── Display_SPI.cpp                      # SPI显示接口
-├── Display_SPI.h                        # SPI显示接口头文件
-├── Display_TFTManager.cpp               # TFT屏幕管理器
-├── Display_TFTManager.h                 # TFT屏幕管理器头文件
-├── Display_font16x16.h                  # 16x16字体数据
-├── font5x7.h                            # 5x7字体数据
-├── Encoder_Control.cpp                  # 编码器控制
-├── Encoder_Control.h                    # 编码器控制头文件
-├── RTOS_TaskFactory.cpp                 # 任务工厂
-├── RTOS_TaskFactory.h                   # 任务工厂头文件
-├── RTOS_TaskManager.cpp                 # 任务管理器
-├── RTOS_TaskManager.h                   # 任务管理器头文件
-├── Camera_CameraManager.cpp             # 相机管理
-├── Camera_CameraManager.h               # 相机管理头文件
-├── Camera_CameraCore.cpp                # 相机核心功能
-├── Camera_CameraCore.h                  # 相机核心功能头文件
-├── Camera_SDCardManager.cpp             # SD卡管理
-├── Camera_SDCardManager.h               # SD卡管理头文件
-├── Camera_ImageConfig.h                 # 图像配置
-├── DS1307_ClockModule.cpp               # DS1307时钟模块
-├── DS1307_ClockModule.h                 # DS1307时钟模块头文件
-├── System_ConfigManager.cpp             # 系统配置管理
-├── System_ConfigManager.h               # 系统配置管理头文件
-├── System_ResourceManager.cpp           # 系统资源管理
-├── System_ResourceManager.h             # 系统资源管理头文件
-├── System_StateManager.cpp              # 系统状态管理
-├── System_StateManager.h                # 系统状态管理头文件
-├── Utils_Logger.cpp                     # 日志工具
-├── Utils_Logger.h                       # 日志工具头文件
-├── Utils_BufferManager.cpp              # 缓冲区管理
-├── Utils_BufferManager.h                # 缓冲区管理头文件
-└── Utils_Timer.cpp                      # 定时器工具
-└── Utils_Timer.h                        # 定时器工具头文件
+├── Camera.ino                # 主程序入口
+├── README.md                 # 项目说明文档
+├── Shared_GlobalDefines.h    # 全局定义
+├── Shared_Types.h            # 共享数据类型
+├── Shared_SharedResources.h  # 共享资源
+├── Menu_MenuContext.cpp      # 菜单上下文管理
+├── Menu_MenuManager.cpp      # 菜单管理器
+├── MenuPages.h               # 菜单页面数据
+├── Display_AmebaST7789_DMA_SPI1.h  # 显示驱动
+├── Display_FontRenderer.cpp  # 字体渲染
+├── Encoder_Control.cpp       # 编码器控制
+├── RTOS_TaskFactory.cpp      # 任务工厂
+├── Camera_CameraManager.cpp  # 相机管理
+└── Utils_Logger.cpp          # 日志工具
 ```
 
 ## 编译和上传
@@ -236,14 +193,24 @@ Camera/
 - 确认DS1307模块电源正常
 - 检查是否存在引脚冲突
 - 确认UPDATE_DS1307_TIME宏配置正确
+- 检查DS1307_TIME_READ_ENABLED宏是否正确配置
+
+### NTP时间同步错误
+- 检查WiFi网络连接是否正常
+- 确认WiFi配置（SSID和密码）是否正确
+- 检查NTP服务器列表是否可用
+- 确认网络环境是否支持NTP协议（无防火墙限制）
+- 检查任务管理器配置，确保校时任务正确创建
+- 若系统卡死，检查是否存在任务双重删除问题
 
 ## 版本历史
 
-### V1.3.0 (2026-01-11)
-- 更新README.md，完善项目结构描述
-- 增强系统管理功能，添加配置、资源和状态管理
-- 优化系统架构文档
-- 改进菜单模块，添加菜单项管理和三角形光标控制器
+### V1.3.0 (2026-01-13)
+- 新增NTP网络时间同步功能，支持国内服务器列表轮询
+- 实现DS1307时间读取控制开关，可通过宏定义灵活启用/禁用
+- 优化相机预览帧率，修复时间计数逻辑并提高SPI显示频率
+- 改进子菜单A位置的校时功能，确保任务正确创建和执行
+- 解决任务双重删除导致的系统卡死问题
 
 ### V1.2.0 (2026-01-10)
 - 改进图片回放功能，支持最大1000张照片

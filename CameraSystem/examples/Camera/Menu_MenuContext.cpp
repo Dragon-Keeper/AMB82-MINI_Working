@@ -308,6 +308,22 @@ void MenuContext::handleSubMenu() {
             // F位置按下：返回主菜单
             Utils_Logger::info("子菜单F位置：返回主菜单");
             switchToMainMenu();
+        } else if (getCurrentMenuItem() == POS_A) {
+            // A位置按下：启动后台校时功能
+            Utils_Logger::info("子菜单A位置：启动后台校时功能");
+            
+            // 检查任务状态，如果不是删除状态，就标记为删除状态
+            if (TaskManager::getTaskState(TaskManager::TASK_TIME_SYNC) != TASK_STATE_DELETED) {
+                Utils_Logger::info("将现有任务标记为删除状态");
+                TaskManager::markTaskAsDeleting(TaskManager::TASK_TIME_SYNC);
+            }
+            
+            // 创建新任务
+            if (TaskFactory::createDefaultTask(TaskManager::TASK_TIME_SYNC)) {
+                Utils_Logger::info("后台校时任务启动成功");
+            } else {
+                Utils_Logger::error("后台校时任务启动失败");
+            }
         } else {
             // 其他位置按下：无操作，仅显示位置信息
             Utils_Logger::info("子菜单非F位置按下：位置%c", (char)('A' + getCurrentMenuItem()));

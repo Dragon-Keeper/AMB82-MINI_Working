@@ -19,6 +19,7 @@ public:
         TASK_FUNCTION_D = 3,
         TASK_FUNCTION_E = 4,
         TASK_SYSTEM_SETTINGS = 5,
+        TASK_TIME_SYNC = 6,
         TASK_MAX
     } TaskID;
 

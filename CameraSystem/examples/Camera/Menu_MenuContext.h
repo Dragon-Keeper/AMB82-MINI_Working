@@ -16,6 +16,7 @@
 #include "Utils_Timer.h"
 #include "System_StateManager.h"
 #include "RTOS_TaskManager.h"
+#include "RTOS_TaskFactory.h"
 #include "Camera_CameraManager.h"
 
 // 前向声明
