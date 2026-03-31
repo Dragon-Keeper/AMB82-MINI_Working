@@ -8,6 +8,22 @@
 #define GLOBAL_DEFINES_H
 
 // ===============================================
+// 系统版本号定义
+// ===============================================
+#define SYSTEM_VERSION_MAJOR 1
+#define SYSTEM_VERSION_MINOR 28
+#define SYSTEM_VERSION_STRING "V1.28"
+
+// ===============================================
+// 音频录制配置
+// ===============================================
+#define AUDIO_ENABLED 1
+#define AUDIO_SAMPLE_RATE 16000  // 16kHz采样率
+#define AUDIO_CHANNELS 1          // 单声道
+#define AUDIO_BITS_PER_SAMPLE 16  // 16位采样
+#define AUDIO_FRAME_SIZE 2048     // 音频帧大小(采样数)
+
+// ===============================================
 // TFT屏幕引脚定义
 // ===============================================
 #define TFT_CS   SPI1_SS

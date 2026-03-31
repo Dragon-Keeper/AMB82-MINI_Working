@@ -9,9 +9,7 @@
 #include "Utils_Timer.h"
 #include "DS1307_ClockModule.h"
 #include <stdio.h>
-
-// 外部全局DS1307时钟模块实例
-extern DS1307_ClockModule clockModule;
+#include <string.h>
 
 SDCardManager::SDCardManager()
     : m_initialized(false)
@@ -243,20 +241,26 @@ char* SDCardManager::generateTimestampFileName(char* buffer, uint32_t bufferSize
 
     // 从DS1307模块获取当前时间
     DS1307_Time currentTime;
-    bool success = clockModule.readTime(currentTime);
-    
-    if (!success) {
-        Utils_Logger::error("Failed to read time from DS1307");
-        // 如果读取失败，使用默认时间
-        currentTime = {0, 0, 0, 1, 1, 1, 2026};
-    }
+    readDS1307Time(currentTime);
 
     // 获取系统毫秒时间（0-999）
     uint32_t milliseconds = millis() % 1000;
     
+    // 根据文件扩展名选择合适的前缀
+    const char* prefix = "IMG_"; // 默认前缀
+    
+    // 如果是视频文件，使用Video前缀
+    if (extension != nullptr) {
+        if (strcmp(extension, ".mp4") == 0 || strcmp(extension, ".avi") == 0 || 
+            strcmp(extension, ".mov") == 0 || strcmp(extension, ".mkv") == 0) {
+            prefix = "Video_";
+        }
+    }
+    
     // 生成格式为YYYYMMDD_HHMMSSXXX的文件名，XXX为毫秒级时间
-    snprintf(buffer, bufferSize, "%sIMG_%04u%02u%02u_%02u%02u%02u%03lu%s", 
+    snprintf(buffer, bufferSize, "%s%s%04u%02u%02u_%02u%02u%02u%03lu%s", 
              getRootPath(), 
+             prefix,
              currentTime.year, currentTime.month, currentTime.date, 
              currentTime.hours, currentTime.minutes, currentTime.seconds,
              milliseconds,

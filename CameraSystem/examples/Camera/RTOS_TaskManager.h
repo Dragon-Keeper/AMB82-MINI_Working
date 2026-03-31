@@ -20,6 +20,8 @@ public:
         TASK_FUNCTION_E = 4,
         TASK_SYSTEM_SETTINGS = 5,
         TASK_TIME_SYNC = 6,
+        TASK_AUDIO_PROCESSING = 7,
+        TASK_VIDEO_FRAME_CAPTURE = 8,
         TASK_MAX
     } TaskID;
 

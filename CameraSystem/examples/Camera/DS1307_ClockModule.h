@@ -77,4 +77,7 @@ private:
     bool readRegisters(uint8_t startAddr, uint8_t *data, uint8_t length);
 };
 
+// 全局DS1307时间读取函数，提供统一的时间读取接口
+extern DS1307_ClockModule clockModule;
+void readDS1307Time(DS1307_Time& time);
 #endif // DS1307_CLOCKMODULE_H

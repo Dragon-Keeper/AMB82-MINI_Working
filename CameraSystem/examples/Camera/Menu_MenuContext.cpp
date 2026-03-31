@@ -5,6 +5,7 @@
  */
 
 #include "Menu_MenuContext.h"
+#include "Camera_CameraManager.h"
 
 // 前向声明全局菜单上下文对象
 extern MenuContext menuContext;

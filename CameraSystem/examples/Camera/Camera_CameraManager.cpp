@@ -107,14 +107,14 @@ bool CameraManager::startPreview() {
 
     m_tftManager->fillScreen(ST7789_BLACK);
 
-    int centerX = m_fontRenderer->calculateCenterPosition(240, m_fontRenderer->getRealTimePreviewString());
-    m_fontRenderer->drawChineseString(centerX, 150, m_fontRenderer->getRealTimePreviewString(), ST7789_WHITE, ST7789_BLACK);
-    Utils_Timer::delayMs(1000);
+    // 重新配置视频通道，确保使用正确的配置（解决从视频模式返回后的栅格问题）
+    Utils_Logger::info("Reconfiguring camera channels for photo mode...");
+    Camera.configVideoChannel(PREVIEW_CH, configPreview);
+    Camera.configVideoChannel(STILL_CH, configStill);
+    Camera.videoInit();
 
     Camera.channelEnd(CHANNEL_PREVIEW);
     Camera.channelBegin(CHANNEL_PREVIEW);
-
-    m_tftManager->fillScreen(ST7789_BLACK);
 
     Utils_Logger::info("Camera preview started");
     return true;

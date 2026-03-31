@@ -96,7 +96,23 @@ void TaskManager::initTaskInfos() {
     taskInfos[TASK_SYSTEM_SETTINGS].handle = NULL;
     taskInfos[TASK_SYSTEM_SETTINGS].state = TASK_STATE_INACTIVE;
     
-    // 初始化任务参数数组
+    // 音频处理任务
+    taskInfos[TASK_AUDIO_PROCESSING].id = TASK_AUDIO_PROCESSING;
+    taskInfos[TASK_AUDIO_PROCESSING].name = "AudioProcessing";
+    taskInfos[TASK_AUDIO_PROCESSING].function = taskAudioProcessing;
+    taskInfos[TASK_AUDIO_PROCESSING].stackSize = 4096;
+    taskInfos[TASK_AUDIO_PROCESSING].priority = 4;
+    taskInfos[TASK_AUDIO_PROCESSING].handle = NULL;
+    taskInfos[TASK_AUDIO_PROCESSING].state = TASK_STATE_INACTIVE;
+    
+    taskInfos[TASK_VIDEO_FRAME_CAPTURE].id = TASK_VIDEO_FRAME_CAPTURE;
+    taskInfos[TASK_VIDEO_FRAME_CAPTURE].name = "VideoFrameCap";
+    taskInfos[TASK_VIDEO_FRAME_CAPTURE].function = taskVideoFrameCapture;
+    taskInfos[TASK_VIDEO_FRAME_CAPTURE].stackSize = 4096;
+    taskInfos[TASK_VIDEO_FRAME_CAPTURE].priority = 5;
+    taskInfos[TASK_VIDEO_FRAME_CAPTURE].handle = NULL;
+    taskInfos[TASK_VIDEO_FRAME_CAPTURE].state = TASK_STATE_INACTIVE;
+    
     for (uint32_t i = 0; i < TASK_MAX; i++) {
         taskParams[i] = NULL;
     }
@@ -110,10 +126,19 @@ TaskHandle_t TaskManager::createTask(TaskID id) {
     
     TaskInfo& taskInfo = taskInfos[id];
     
-    // 检查任务是否已存在
-    if (taskInfo.handle != NULL && taskInfo.state != TASK_STATE_DELETED) {
-        Utils_Logger::info("Task %s already exists", taskInfo.name);
-        return taskInfo.handle;
+    // 检查任务是否已存在（关键修复：只要handle不为NULL或状态不是INACTIVE/DELETED，就认为任务存在）
+    if (taskInfo.handle != NULL || (taskInfo.state != TASK_STATE_INACTIVE && taskInfo.state != TASK_STATE_DELETED)) {
+        Utils_Logger::info("Task %s already exists (handle=%p, state=%d)", taskInfo.name, taskInfo.handle, taskInfo.state);
+        
+        // 如果状态是DELETED，或者handle是NULL，说明任务没有完全清理，我们清理状态后继续创建
+        if (taskInfo.state == TASK_STATE_DELETED || taskInfo.handle == NULL) {
+            Utils_Logger::info("Cleaning up stale task state for %s", taskInfo.name);
+            taskInfo.handle = NULL;
+            taskInfo.state = TASK_STATE_INACTIVE;
+        } else {
+            // 任务确实在运行，返回现有句柄
+            return taskInfo.handle;
+        }
     }
     
     // 创建任务，传递任务参数

@@ -119,6 +119,11 @@ void handleEncoderButton();
 // 包含DS1307时钟模块头文件
 #include "DS1307_ClockModule.h"
 
+// 包含视频录制模块头文件
+#include "VideoRecorder.h"
+#include "Inmp441_MicrophoneManager.h"
+#include "MJPEG_Encoder.h"
+
 // 时间更新开关：设置为1时，刷入固件会更新DS1307时间；设置为0时，不会更新时间
 #define UPDATE_DS1307_TIME 0 // 停止时间更新
 
@@ -133,11 +138,13 @@ DS1307_Time currentTime;
 MenuManager menuManager(tftManager);
 JPEGDEC jpeg;
 
-// 模块化移植：阶段五 - SD卡管理器实例
+// 初始化SD卡管理器实例
 SDCardManager sdCardManager;
 
 // 模块化移植：阶段四 - 编码器控制实例
 EncoderControl encoder;
+
+// 麦克风管理器实例（已在Inmp441_MicrophoneManager.cpp中定义）
 
 // 模块化移植：阶段五 - 相机管理器实例
 CameraManager cameraManager;
@@ -274,6 +281,17 @@ void setup() {
     }
     Utils_Logger::info("相机管理器初始化成功");
     
+    // 初始化INMP441麦克风模块
+    Utils_Logger::info("初始化INMP441麦克风模块...");
+    if (!g_microphoneManager.init()) {
+        Utils_Logger::error("麦克风初始化失败！");
+    } else {
+        Utils_Logger::info("INMP441麦克风模块初始化成功！");
+    }
+    
+    // 将sdCardManager的文件系统共享给麦克风模块
+    g_microphoneManager.setFileSystem(sdCardManager.getFileSystem());
+    
     // 设置菜单页面
     Utils_Logger::info("设置菜单页面...");
     menuManager.setMenuPages(menuPages, MENU_PAGE_COUNT);
@@ -304,13 +322,15 @@ void setup() {
     
     // 注册所有任务
     TaskFactory::registerTask(TaskManager::TASK_CAMERA_PREVIEW, "CameraPreview", taskCameraPreview, 1024, 1);
-    TaskFactory::registerTask(TaskManager::TASK_FUNCTION_B, "FunctionB", taskFunctionB, 1024, 1);
+    TaskFactory::registerTask(TaskManager::TASK_FUNCTION_B, "FunctionB", taskFunctionB, 4096, 1); // 增加堆栈大小以支持视频录制
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_C, "FunctionC", taskFunctionC, 4096, 1); // 增加堆栈大小以避免溢出
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_D, "FunctionD", taskFunctionD, 1024, 1);
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_E, "FunctionE", taskFunctionE, 1024, 1);
     TaskFactory::registerTask(TaskManager::TASK_SYSTEM_SETTINGS, "SystemSettings", taskSystemSettings, 1024, 1);
     TaskFactory::registerTask(TaskManager::TASK_TIME_SYNC, "TimeSync", taskTimeSync, 2048, 1); // 注册后台校时任务
-    
+    TaskFactory::registerTask(TaskManager::TASK_AUDIO_PROCESSING, "AudioProcessing", taskAudioProcessing, 2048, 4); // 注册音频处理任务（优先级4）
+    TaskFactory::registerTask(TaskManager::TASK_VIDEO_FRAME_CAPTURE, "VideoFrameCapture", taskVideoFrameCapture, 2048, 5); // 注册视频帧获取任务（优先级5）
+    /*
     // 创建后台校时任务
     Utils_Logger::info("创建后台校时任务...");
     if (TaskFactory::createDefaultTask(TaskManager::TASK_TIME_SYNC)) {
@@ -318,7 +338,7 @@ void setup() {
     } else {
         Utils_Logger::error("后台校时任务创建失败");
     }
-    
+    */
     Utils_Logger::info("系统初始化完成，等待用户交互...");
     Utils_Logger::info("===================================");
 }
@@ -448,8 +468,12 @@ void taskTimeSync(void* parameters) {
 }
 
 void loop() {
-    // 模块化移植：阶段四 - 使用EncoderControl类检测按钮状态
-    encoder.checkButton();
+    // 模块化移植：阶段四 - 使用EncoderControl类检测按钮和旋转状态
+    // 只在主菜单模式下检查编码器，避免与其他任务的编码器检查冲突！
+    if (StateManager::getInstance().getCurrentState() == STATE_MAIN_MENU) {
+        encoder.checkButton();
+        encoder.checkRotation();
+    }
     
     // DS1307时间读取与计数功能控制开关
     // 开关状态可通过修改DS1307_TIME_READ_ENABLED宏来控制（1:启用, 0:禁用）
@@ -514,6 +538,13 @@ void loop() {
                     Utils_Logger::info("主菜单A位置：创建相机预览任务");
                     // 只有当任务创建成功时，才更新系统状态
                     if (TaskFactory::createDefaultTask(TaskManager::TASK_CAMERA_PREVIEW)) {
+                        StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
+                    }
+                } else if (currentMenuItem == POS_B) {
+                    // B位置按下：创建拍视频任务
+                    Utils_Logger::info("主菜单B位置：创建拍视频任务");
+                    // 只有当任务创建成功时，才更新系统状态
+                    if (TaskFactory::createDefaultTask(TaskManager::TASK_FUNCTION_B)) {
                         StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
                     }
                 } else if (currentMenuItem == POS_C) {

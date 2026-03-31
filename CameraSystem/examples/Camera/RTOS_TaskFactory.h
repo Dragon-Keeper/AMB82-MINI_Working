@@ -101,5 +101,7 @@ extern void taskFunctionC(void* pvParameters);
 extern void taskFunctionD(void* pvParameters);
 extern void taskFunctionE(void* pvParameters);
 extern void taskSystemSettings(void* pvParameters);
+extern void taskAudioProcessing(void* pvParameters);
+extern void taskVideoFrameCapture(void* pvParameters);
 
 #endif // RTOS_TASKFACTORY_H

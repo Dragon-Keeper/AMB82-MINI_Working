@@ -49,6 +49,9 @@ public:
     char* generatePhotoFileName(char* buffer, uint32_t bufferSize);
     char* generateTimestampFileName(char* buffer, uint32_t bufferSize, const char* extension);
 
+    // 获取文件系统指针，供其他模块使用
+    AmebaFatFS* getFileSystem() { return &m_fs; }
+
 private:
     bool m_initialized;
     AmebaFatFS m_fs;

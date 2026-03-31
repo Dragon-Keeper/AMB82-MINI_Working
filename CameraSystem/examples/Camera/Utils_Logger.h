@@ -12,9 +12,9 @@
 class Utils_Logger {
 public:
     typedef enum {
-        LEVEL_ERROR = 0,
-        LEVEL_INFO = 1,
-        LEVEL_DEBUG = 2
+        LEVEL_ERROR = 0,    // 错误级别：只输出错误信息，用于生产环境
+        LEVEL_INFO = 1,     // 信息级别：输出错误和信息，用于一般调试
+        LEVEL_DEBUG = 2     // 调试级别：输出所有信息，包括详细的调试信息，用于开发阶段
     } LogLevel;
     
     // 初始化日志系统

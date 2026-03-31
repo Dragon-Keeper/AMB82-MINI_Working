@@ -43,9 +43,13 @@ public:
     
     // 消抖参数配置
     void setDebounceTime(unsigned long ms);
+    void setRotationDebounceTime(unsigned long ms); // 新增：设置旋转防抖时间
     
     // 按钮检测函数（需要在主循环中调用）
     void checkButton();
+    
+    // 旋转检测函数（需要在主循环中调用）
+    void checkRotation();
     
     // 清理资源
     void cleanup();
@@ -71,6 +75,8 @@ private:
     
     // 消抖参数
     unsigned long m_debounceDelay;
+    unsigned long m_rotationDebounceDelay;  // 新增：旋转防抖延迟
+    unsigned long m_lastRotationTime;       // 新增：上次旋转事件时间
     
     // 事件回调函数
     RotationCallback m_rotationCallback;

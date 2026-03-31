@@ -1,0 +1,41 @@
+AMB82-MINI开发板的引脚
+开发板上的丝印名称：Arduino Pin名称：功能
+GPIOF13:6:I2S0_CLK
+GPIOF14:7:I2S0_SD_TX0	主控 发​ 数据
+GPIOF11:4:I2S0_MCK
+GPIOF15:8:I2S0_WS
+GPIOF12:5:I2S0_SD_RX	主控 收​ 数据
+GPIOD14:20:I2S1_CLK
+GPIOD15:19:I2S1_SD_TX0	主控 发​ 数据
+GPIOD16:18:I2S1_MCK
+GPIOD17:17:I2S1_WS
+GPIOD18:16:I2S1_SD_RX	主控 收​ 数据
+
+当前使用引脚连接定义：
+INMP441麦克风
+引脚编号 -> 功能引脚
+16  -> SD(DOUT)
+17  -> WS(LRC)
+20  -> SCK(BCLK)
+GND -> L/R
+VCC -> 3.3V
+
+俯视：
+麦克风拾音孔向下时：
+    +10μF钽电容或陶瓷电容
+	 |----|
+	0.1μF陶瓷电容
+	 |----|
+SD	VCC	 GND
+		  |
+SCK WS	 L/R
+
+麦克风拾音孔向上时：
+
+SCK WS	 L/R
+		  |
+SD	VCC	 GND
+	 |----| 
++10μF电解电容-
+	 |----|
+0.1μF陶瓷电容

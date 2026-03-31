@@ -52,23 +52,21 @@ void Display_FontRenderer::drawChineseChar(int16_t x, int16_t y, uint8_t charInd
 }
 
 void Display_FontRenderer::processFontData(const uint8_t* fontData, uint16_t color, uint16_t bgColor) {
-    // 实现方式：将原数据按顺时针90度旋转后填入缓冲区
+    // 按字库原始顺序填充缓冲区，行优先存储
     for (int row = 0; row < 16; row++) {
-        // 获取字库数据中的高字节和低字节
-        uint8_t highByte = fontData[row * 2];      // 高8位，表示每行的前8个像素
-        uint8_t lowByte = fontData[row * 2 + 1];   // 低8位，表示每行的后8个像素
-        // 合并为16位数据，表示该行16个像素的点阵信息
-        uint16_t rowBits = (highByte << 8) | lowByte;
+        // 计算当前行在字库数据中的起始位置
+        int dataOffset = row * 2;
+        // 合并为16位数据，获取该行的点阵信息
+        uint16_t rowBits = (fontData[dataOffset] << 8) | fontData[dataOffset + 1];
             
+        // 计算当前行在缓冲区中的起始位置
+        int bufferRowStart = row * 16;
         for (int col = 0; col < 16; col++) {
-            // 检查对应位是否为1（从高位到低位），判断该像素是否为字符像素
-            // (1 << (15 - col)) 生成第(15-col)位为1的掩码，与rowBits进行与运算
-            // 必须使用下面的"col * 16 + row;"才能正常方向显示文字
-            int bufferIndex = col * 16 + row;
-            if (rowBits & (1 << (15 - col))) {
-                m_fontBuffer[bufferIndex] = color;  // 字符像素：使用前景色
+            // 检查对应位是否为字符像素（高位在前）
+            if (rowBits & (0x8000 >> col)) {
+                m_fontBuffer[bufferRowStart + col] = color;  // 字符像素
             } else {
-                m_fontBuffer[bufferIndex] = bgColor;  // 背景像素：使用背景色
+                m_fontBuffer[bufferRowStart + col] = bgColor;  // 背景像素
             }
         }
     }

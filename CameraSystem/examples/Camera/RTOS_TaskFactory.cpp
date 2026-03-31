@@ -11,6 +11,9 @@
 #include "Encoder_Control.h"
 #include "Camera_SDCardManager.h"
 #include "TJpg_Decoder.h"
+#include "Inmp441_MicrophoneManager.h"
+#include "VideoRecorder.h"
+#include "MJPEG_Encoder.h"
 
 // 外部全局对象声明
 extern Display_TFTManager tftManager;
@@ -21,6 +24,7 @@ extern EncoderControl encoder;
 extern SDCardManager sdCardManager;
 extern Display_FontRenderer fontRenderer;
 extern JPEGDEC jpeg;
+extern Inmp441MicrophoneManager g_microphoneManager;
 
 // JPEG解码回调函数
 bool jpegDrawCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) {
@@ -35,6 +39,22 @@ bool jpegDrawCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bi
 
 // 任务函数实现
 
+// 拍照功能：编码器旋转处理函数
+void capturePhotoHandleEncoderRotation(RotationDirection direction) {
+    // 拍照功能中旋转编码器用于返回主菜单
+    Utils_Logger::info("拍照模式：检测到编码器旋转，返回主菜单");
+    TaskManager::setEvent(EVENT_RETURN_TO_MENU);
+}
+
+// 拍照功能：编码器按钮处理函数
+void capturePhotoHandleEncoderButton() {
+    // 拍照功能中按钮按下用于拍照
+    Utils_Logger::info("拍照模式：按钮按下，开始拍照");
+    if (!cameraManager.isCapturing()) {
+        cameraManager.requestCapture();
+    }
+}
+
 /**
  * 相机预览任务 (位置A)
  */
@@ -44,6 +64,9 @@ void taskCameraPreview(void* pvParameters) {
     uint32_t taskId = (params != NULL) ? params->param1 : 0;
     
     Utils_Logger::info("相机预览任务 %c 启动", (char)('A' + taskId));
+    
+    // 设置系统状态为相机预览模式
+    StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
     
     // 任务初始化 - 使用CameraManager
     // 检查相机管理器是否已初始化，如果没有则重新初始化
@@ -60,7 +83,14 @@ void taskCameraPreview(void* pvParameters) {
             return;
         }
     }
+    
+    // 设置编码器回调函数
+    encoder.setRotationCallback(capturePhotoHandleEncoderRotation);
+    encoder.setButtonCallback(capturePhotoHandleEncoderButton);
+    
     cameraManager.startPreview();
+    
+    Utils_Logger::info("拍照功能初始化完成，等待用户操作");
     
     // 任务主循环
     while (1) {
@@ -79,7 +109,7 @@ void taskCameraPreview(void* pvParameters) {
         uint32_t uxBits = TaskManager::waitForEvent(
             EVENT_RETURN_TO_MENU,
             true,
-            1 / portTICK_PERIOD_MS  // 减少超时时间，提高响应速度
+            10 / portTICK_PERIOD_MS
         );
         
         if ((uxBits & EVENT_RETURN_TO_MENU) != 0) {
@@ -87,22 +117,32 @@ void taskCameraPreview(void* pvParameters) {
             break;
         }
         
-        // 移除不必要的延迟，最大化帧率
+        // 检查编码器状态
+        encoder.checkRotation();
+        encoder.checkButton();
     }
     
     // 任务清理 - 使用CameraManager
     cameraManager.stopPreview();
     
-    // 立即更新系统状态为STATE_MAIN_MENU，防止编码器事件继续被相机预览模式处理
-    StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
-    
-    // 首先清除退出事件标志，防止残留影响新任务
+    // 首先清除退出事件标志
     TaskManager::clearEvent(EVENT_RETURN_TO_MENU);
     
-    // 切换回主菜单（在清理资源之前，确保菜单能正常显示）
-    menuContext.switchToMainMenu();
+    // 重置编码器回调函数为主菜单回调
+    extern void handleEncoderRotation(RotationDirection direction);
+    extern void handleEncoderButton();
+    encoder.setRotationCallback(handleEncoderRotation);
+    encoder.setButtonCallback(handleEncoderButton);
+    Utils_Logger::info("已重置编码器回调函数为主菜单回调");
     
-    // 清除所有事件标志，确保系统状态干净
+    // 切换回主菜单并强制重绘整个界面
+    menuContext.switchToMainMenu();
+    menuContext.showMenu();
+    
+    // 立即更新系统状态为STATE_MAIN_MENU
+    StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
+    
+    // 清除所有事件标志
     TaskManager::clearEvent(EVENT_ALL_TASKS_CLEAR);
     
     // 更新任务状态信息
@@ -110,9 +150,6 @@ void taskCameraPreview(void* pvParameters) {
     
     Utils_Logger::info("相机预览任务 %c 退出", (char)('A' + taskId));
     
-    // 清理相机资源
-    cameraManager.cleanup();
-    
     // 清理任务参数
     if (params != NULL) {
         delete params;
@@ -122,15 +159,52 @@ void taskCameraPreview(void* pvParameters) {
     vTaskDelete(NULL);
 }
 
+// 拍视频功能：编码器旋转处理函数
+void captureVideoHandleEncoderRotation(RotationDirection direction) {
+    // 拍视频功能中旋转编码器用于返回主菜单
+    Utils_Logger::info("拍视频模式：检测到编码器旋转，返回主菜单");
+    TaskManager::setEvent(EVENT_RETURN_TO_MENU);
+}
+
+// 拍视频功能：编码器按钮处理函数
+void captureVideoHandleEncoderButton() {
+    // 根据当前录制状态切换视频录制
+    if (g_recorderState == REC_IDLE) {
+        // 空闲状态：启动视频录制
+        Utils_Logger::info("拍视频模式：按钮按下，开始录制");
+        startVideoRecording();
+    } else if (g_recorderState == REC_RECORDING) {
+        // 录制状态：停止视频录制
+        Utils_Logger::info("拍视频模式：按钮按下，停止录制");
+        stopVideoRecording();
+    }
+}
+
 /**
- * 功能模块B任务 (位置B)
+ * 功能模块B任务 (位置B) - 拍视频功能
  */
 void taskFunctionB(void* pvParameters) {
     // 解析任务参数
     TaskFactory::TaskParams* params = static_cast<TaskFactory::TaskParams*>(pvParameters);
     uint32_t taskId = (params != NULL) ? params->param1 : 1;
     
-    Utils_Logger::info("功能模块B任务 %c 启动", (char)('A' + taskId));
+    Utils_Logger::info("功能模块B任务 %c 启动 - 拍视频功能", (char)('A' + taskId));
+    
+    // 设置系统状态为相机预览模式
+    StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
+    
+    // 初始化视频录制器
+    Utils_Logger::info("初始化视频录制器...");
+    videoRecorderInit();
+    
+    // 设置编码器回调函数
+    encoder.setRotationCallback(captureVideoHandleEncoderRotation);
+    encoder.setButtonCallback(captureVideoHandleEncoderButton);
+    
+    // 进入空闲状态，直接显示预览画面（移除文字提示页面）
+    g_recorderState = REC_IDLE;
+    
+    Utils_Logger::info("拍视频功能初始化完成，等待用户操作");
     
     // 任务主循环
     while (1) {
@@ -138,36 +212,74 @@ void taskFunctionB(void* pvParameters) {
         uint32_t uxBits = TaskManager::waitForEvent(
             EVENT_RETURN_TO_MENU,
             true,
-            100 / portTICK_PERIOD_MS
+            10 / portTICK_PERIOD_MS
         );
         
-        // 不再需要直接检查编码器，因为系统状态设置为STATE_CAMERA_PREVIEW后，
-        // 编码器旋转事件会通过handleEncoderRotation函数正确处理
-        // 移除直接检测避免按钮按下时的微小抖动被误判为旋转事件
-        
         if ((uxBits & EVENT_RETURN_TO_MENU) != 0) {
+            Utils_Logger::info("拍视频任务收到退出信号");
             break;
         }
         
-        // 任务功能实现
-        // TODO: 实现功能模块B的具体逻辑
+        // 根据当前状态执行不同的处理
+        switch (g_recorderState) {
+            case REC_IDLE:
+                // 空闲状态：只处理预览帧
+                processPreviewFrame();
+                break;
+            case REC_RECORDING:
+                // 录制状态：运行视频录制循环
+                videoRecorderLoop();
+                // 同时处理预览帧（用于LCD显示）
+                processPreviewFrame();
+                break;
+            default:
+                break;
+        }
         
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        // 优先运行麦克风模块循环（确保音频数据不丢失）
+        g_microphoneManager.loop();
+        g_microphoneManager.loop();
+        
+        // 检查编码器状态
+        encoder.checkRotation();
+        encoder.checkButton();
     }
     
-    // 首先清除退出事件标志，防止残留影响新任务
+    // 任务清理
+    Utils_Logger::info("拍视频功能清理中...");
+    
+    // 如果正在录制，先停止录制
+    if (g_recorderState == REC_RECORDING) {
+        stopVideoRecording();
+    }
+    
+    // 清理视频录制器资源（关键修复！）
+    videoRecorderCleanup();
+    
+    // 首先清除退出事件标志
     TaskManager::clearEvent(EVENT_RETURN_TO_MENU);
+    
+    // 重置编码器回调函数为主菜单回调（关键修复！）
+    extern void handleEncoderRotation(RotationDirection direction);
+    extern void handleEncoderButton();
+    encoder.setRotationCallback(handleEncoderRotation);
+    encoder.setButtonCallback(handleEncoderButton);
+    Utils_Logger::info("已重置编码器回调函数为主菜单回调");
+    
+    // 切换回主菜单并强制重绘整个界面
+    menuContext.switchToMainMenu();
+    menuContext.showMenu(); // 关键修复：强制重绘主菜单和三角形，确保界面正确显示
     
     // 更新系统状态返回到主菜单
     StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
     
-    // 清除所有事件标志，确保系统状态干净
+    // 清除所有事件标志
     TaskManager::clearEvent(EVENT_ALL_TASKS_CLEAR);
     
     // 更新任务状态信息
     TaskManager::markTaskAsDeleting(TaskManager::TASK_FUNCTION_B);
     
-    Utils_Logger::info("功能模块B任务 %c 退出", (char)('A' + taskId));
+    Utils_Logger::info("功能模块B任务 %c 退出 - 拍视频功能", (char)('A' + taskId));
     
     // 清理任务参数
     if (params != NULL) {
@@ -179,312 +291,110 @@ void taskFunctionB(void* pvParameters) {
 }
 
 /**
- * 功能模块C任务 (位置C) - 图片回放功能
+ * 功能模块C任务 (位置C) - 照片、视频回放功能
  */
 void taskFunctionC(void* pvParameters) {
     // 解析任务参数
     TaskFactory::TaskParams* params = static_cast<TaskFactory::TaskParams*>(pvParameters);
     uint32_t taskId = (params != NULL) ? params->param1 : 2;
     
-    Utils_Logger::info("功能模块C任务 %c 启动 - 图片回放功能", (char)('A' + taskId));
+    Utils_Logger::info("功能模块C任务 %c 启动 - 照片、视频回放功能", (char)('A' + taskId));
     
-    // 设置系统状态为相机预览模式，以便编码器旋转事件能正确触发返回主菜单
+    // 设置系统状态为相机预览模式
     StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
     
-    // 初始化JPEG解码器
-    TJpgDec.setCallback(jpegDrawCallback);
-    TJpgDec.setJpgScale(4); // 设置缩放比例为4倍，适合将720P缩放到320*180，再通过drawJpg自适应屏幕
+    // 初始化视频录制器（包含回放功能）
+    Utils_Logger::info("初始化视频录制器...");
+    videoRecorderInit();
     
-    // 设置TFT颜色顺序为RGB，与JPEG解码器输出匹配
-    tftManager.setColorOrder(true);
+    // 设置编码器回调函数，用于回放功能的交互（在videoRecorderInit之后设置，避免被覆盖）
+    encoder.setRotationCallback(videoHandleEncoderRotation);
+    encoder.setButtonCallback(videoHandleEncoderButton);
     
-    // 初始化SD卡文件系统
-    AmebaFatFS fs;
-    if (!fs.begin()) {
-        Utils_Logger::error("无法找到文件系统，正在尝试重新初始化SD卡");
-        
-        // 清除屏幕并显示错误信息
-        tftManager.fillScreen(ST7789_BLACK);
-        tftManager.setCursor(0, 0);
-        // SD卡错误
-        const uint8_t errorStr1[] = {0x0A, 0x1C, 0x17, 0x0D, 0x1E, 0x14, 0};
-        // 无法找到文件系统
-        const uint8_t errorStr2[] = {0x16, 0x1B, 0x17, 0x0F, 0x12, 0x0A, 0x1C, 0x17, 0x1A, 0x10, 0};
-        fontRenderer.drawChineseString(10, 10, errorStr1, ST7789_RED, ST7789_BLACK);
-        fontRenderer.drawChineseString(10, 40, errorStr2, ST7789_RED, ST7789_BLACK);
-        
-        // 等待一段时间后退出任务
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
-        
-        // 更新系统状态返回到主菜单
-        StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
-        
-        // 清除所有事件标志，确保系统状态干净
-        TaskManager::clearEvent(EVENT_ALL_TASKS_CLEAR);
-        
-        // 更新任务状态信息
-        TaskManager::markTaskAsDeleting(TaskManager::TASK_FUNCTION_C);
-        
-        Utils_Logger::info("功能模块C任务 %c 退出 - 图片回放功能", (char)('A' + taskId));
-        
-        // 清理任务参数
-        if (params != NULL) {
-            delete params;
-        }
-        
-        // 删除任务
-        vTaskDelete(NULL);
-        return;
-    }
+    // 进入文件列表模式
+    enterFileListMode();
     
-    Utils_Logger::info("SD卡文件系统初始化成功");
+    Utils_Logger::info("照片、视频回放功能初始化完成，等待用户操作");
     
-    // 获取根路径
-    String rootPath = String(fs.getRootPath());
-    Utils_Logger::info("根路径: %s，长度: %d", rootPath.c_str(), rootPath.length());
-    
-    // 初始化图片回放所需参数
-    uint32_t currentImageIndex = 0;
-    // MAX_PHOTOS 定义的照片列表占用的是开发板的RAM内存,对于1000张照片，大约需要：1000 × (32 + 24) = 56,000字节（约54.7KB）
-    const uint32_t MAX_PHOTOS = 1000; // 最大照片数量
-    String* photoFiles = new String[MAX_PHOTOS]; // 存储照片文件列表（堆空间分配）
-    uint32_t photoCount = 0; // 实际照片数量
-    
-    // 遍历SD卡目录，收集所有照片文件
-    // 增加目录缓冲区大小以容纳更多文件（约8KB，足够存储1000个短文件名）
-    char dirBuffer[8192]; // 用于存储目录内容的缓冲区
-    
-    // 记录内存使用信息
-    Utils_Logger::info("当前堆空间分配: %d 字节用于照片文件列表", MAX_PHOTOS * sizeof(String));
-    Utils_Logger::info("目录缓冲区大小: %d 字节", sizeof(dirBuffer));
-    
-    // 清空缓冲区，确保起始状态干净
-    memset(dirBuffer, 0, sizeof(dirBuffer));
-    
-    // 打印rootPath信息
-    Utils_Logger::info("rootPath: %s", rootPath.c_str());
-    
-    // 测试直接使用"0:/"作为根路径
-    String testPath = "0:/";
-    int fileCount = fs.readDir(const_cast<char*>(testPath.c_str()), dirBuffer, sizeof(dirBuffer));
-    Utils_Logger::info("使用 testPath '%s' 调用 readDir 返回值: %d", testPath.c_str(), fileCount);
-    
-    // dirBuffer内容已确认包含文件信息，跳过详细日志
-    
-    // 不再依赖fileCount返回值，直接检查dirBuffer是否包含有效内容
-    // 但要跳过前16个字符，因为它们可能包含系统卷信息
-    bool hasValidDirContent = false;
-    for (size_t i = 16; i < sizeof(dirBuffer); i++) {
-        if (dirBuffer[i] != 0) {
-            hasValidDirContent = true;
-            break;
-        }
-    }
-    
-    if (hasValidDirContent) {
-        Utils_Logger::info("找到 %d 个文件", fileCount);
-        
-        // 解析目录内容，筛选出所有.jpg后缀的文件
-        char* p = dirBuffer;
-        uint32_t totalFiles = 0;
-        
-        // 跳过系统卷信息目录
-        if (strncmp(p, "System Volume Information", 24) == 0) {
-            p += strlen(p) + 1;
-            Utils_Logger::info("跳过系统卷信息目录");
-        }
-        
-        while (strlen(p) > 0) {
-            totalFiles++;
-            String filename = String(p);
-            Utils_Logger::info("找到文件: %s", filename.c_str());
-            
-            // 直接检查文件名是否以.jpg结尾
-            if (filename.endsWith(".jpg")) {
-                if (photoCount < MAX_PHOTOS) {
-                    photoFiles[photoCount++] = filename;
-                    Utils_Logger::info("添加照片文件: %s", filename.c_str());
-                } else {
-                    Utils_Logger::info("照片文件数量已达到最大值 %u", MAX_PHOTOS);
-                }
-            }
-            
-            // 移动到下一个文件名（跳过当前文件名和空字符）
-            p += strlen(p) + 1;
-        }
-        
-        Utils_Logger::info("总共处理了 %u 个文件，其中 %u 个是照片文件", totalFiles, photoCount);
-        
-        // 按文件名（时间戳）对照片文件进行排序 - 从最新拍摄到最早拍摄
-        if (photoCount > 1) {
-            for (uint32_t i = 0; i < photoCount - 1; i++) {
-                for (uint32_t j = 0; j < photoCount - i - 1; j++) {
-                    if (photoFiles[j] < photoFiles[j + 1]) {
-                        // 交换文件
-                        String temp = photoFiles[j];
-                        photoFiles[j] = photoFiles[j + 1];
-                        photoFiles[j + 1] = temp;
-                    }
-                }
-            }
-        }
-    }
-    
-    // 检查是否有照片文件
-    bool hasPhotos = photoCount > 0;
-    
-    if (!hasPhotos) {
-        Utils_Logger::info("SD卡中没有找到 .jpg 格式的照片");
-        
-        // 显示提示信息
-        tftManager.fillScreen(ST7789_BLACK);
-        tftManager.setCursor(0, 0);
-        // 无图片文件
-        const uint8_t noImgStr1[] = {0x18, 0x13, 0x0F, 0x0C, 0x1E, 0x14, 0};
-        // SD卡中没有照片
-        const uint8_t noImgStr2[] = {0x0A, 0x1C, 0x17, 0x0D, 0x1E, 0x14, 0x16, 0x1B, 0x0F, 0x12, 0x1A, 0x10, 0};
-        fontRenderer.drawChineseString(10, 10, noImgStr1, ST7789_RED, ST7789_BLACK);
-        fontRenderer.drawChineseString(10, 40, noImgStr2, ST7789_RED, ST7789_BLACK);
-    } else {
-        // 显示第一张照片
-        String firstFilename = photoFiles[0];
-        String firstFullPath = rootPath + firstFilename;
-        
-        File file = fs.open(firstFullPath);
-        if (file && file.isOpen()) {
-            // 使用File类的readFile方法自动分配内存并读取文件
-            unsigned char *file_data;
-            uint32_t file_size;
-            
-            if (file.readFile(file_data, file_size)) {
-                Utils_Logger::info("文件读取成功，大小: %d 字节", file_size);
-                
-                // 清除屏幕
-                tftManager.fillScreen(ST7789_BLACK);
-                tftManager.setCursor(0, 0);
-                
-                // 解码并显示JPG图片
-                // 注意：getJpgSize的前两个参数是0, 0而不是用于存储宽度和高度的指针
-                TJpgDec.getJpgSize(0, 0, (const uint8_t *)file_data, file_size);
-                
-                // 显示JPG图片，忽略返回值因为实际显示成功但函数可能返回false
-                TJpgDec.drawJpg(0, 30, (const uint8_t *)file_data, file_size);
-                Utils_Logger::info("正在显示: %s", firstFilename.c_str());
-                
-                // 释放内存
-                free(file_data);
-            } else {
-                Utils_Logger::error("读取文件失败: %s", firstFilename.c_str());
-            }
-            // 关闭文件
-            file.close();
-        }
-    }
-
     // 任务主循环
     while (1) {
-        // 检查是否需要退出任务或切换照片
+        // 检查是否需要退出任务
         uint32_t uxBits = TaskManager::waitForEvent(
-            EVENT_RETURN_TO_MENU | EVENT_NEXT_PHOTO | EVENT_PREVIOUS_PHOTO,
+            EVENT_RETURN_TO_MENU,
             true,
-            100 / portTICK_PERIOD_MS
+            10 / portTICK_PERIOD_MS
         );
         
         if ((uxBits & EVENT_RETURN_TO_MENU) != 0) {
+            Utils_Logger::info("照片、视频回放任务收到退出信号");
             break;
         }
         
-        // 处理照片切换事件
-        bool needToShowPhoto = false;
-        
-        // 处理下一张照片事件
-        if ((uxBits & EVENT_NEXT_PHOTO) != 0) {
-            currentImageIndex++;
-            if (currentImageIndex >= photoCount) {
-                currentImageIndex = 0; // 循环到第一张
-            }
-            needToShowPhoto = true;
-            Utils_Logger::info("切换到下一张照片，索引: %d", currentImageIndex);
-        }
-        
-        // 处理上一张照片事件
-        if ((uxBits & EVENT_PREVIOUS_PHOTO) != 0) {
-            if (currentImageIndex == 0) {
-                currentImageIndex = photoCount - 1; // 循环到最后一张
-            } else {
-                currentImageIndex--;
-            }
-            needToShowPhoto = true;
-            Utils_Logger::info("切换到上一张照片，索引: %d", currentImageIndex);
-        }
-        
-        // 如果需要显示新照片，并且有照片可显示
-        if (needToShowPhoto && photoCount > 0) {
-            String currentFilename = photoFiles[currentImageIndex];
-            String fullPath = rootPath + currentFilename;
-            
-            Utils_Logger::info("尝试打开文件: %s", fullPath.c_str());
-            
-            if (fs.exists(fullPath)) {
-                // 显示当前照片
-                File file = fs.open(fullPath);
-                if (file && file.isOpen()) {
-                    // 使用File类的readFile方法自动分配内存并读取文件
-                    unsigned char *file_data;
-                    uint32_t file_size;
-                    
-                    if (file.readFile(file_data, file_size)) {
-                        Utils_Logger::info("文件读取成功，大小: %d 字节", file_size);
-                        
-                        // 清除屏幕
-                        tftManager.fillScreen(ST7789_BLACK);
-                        tftManager.setCursor(0, 0);
-                        
-                        // 解码并显示JPG图片
-                        // 注意：getJpgSize的前两个参数是0, 0而不是用于存储宽度和高度的指针
-                        TJpgDec.getJpgSize(0, 0, (const uint8_t *)file_data, file_size);
-                        
-                        // 显示JPG图片，忽略返回值因为实际显示成功但函数可能返回false
-                        TJpgDec.drawJpg(0, 30, (const uint8_t *)file_data, file_size);
-                        Utils_Logger::info("正在显示: %s", currentFilename.c_str());
-                        
-                        // 释放内存
-                        free(file_data);
-                    } else {
-                        Utils_Logger::error("读取文件失败: %s", currentFilename.c_str());
-                    }
-                    // 关闭文件
-                    file.close();
+        // 根据当前状态执行不同的处理
+        switch (g_recorderState) {
+            case REC_FILE_LIST:
+                // 总是调用drawFileListUI()函数，这样选中状态的更新就能被正确处理
+                drawFileListUI();
+                if (fileListNeedsRedraw) {
+                    fileListNeedsRedraw = false;
                 }
-            } else {
-                Utils_Logger::error("文件不存在: %s", fullPath.c_str());
-            }
+                break;
+            case REC_PLAYING:
+                // 运行视频播放或图片查看循环
+                if (isImageViewing) {
+                    imageViewerLoop();
+                } else {
+                    videoPlaybackLoop();
+                }
+                break;
+            default:
+                break;
         }
         
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        // 检查编码器状态
+        encoder.checkRotation();
+        encoder.checkButton();
     }
     
-    // 关闭文件系统
-    fs.end();
+    // 任务清理
+    Utils_Logger::info("照片、视频回放功能清理中...");
     
-    // 切换回主菜单（在清理资源之前，确保菜单能正常显示）
-    menuContext.switchToMainMenu();
+    // 如果正在播放，先停止播放
+    if (g_recorderState == REC_PLAYING) {
+        if (isImageViewing) {
+            stopImageViewer();
+        } else {
+            stopVideoPlayback();
+        }
+    }
     
-    // 首先清除退出事件标志，防止残留影响新任务
+    // 清理视频录制器资源
+    videoRecorderCleanup();
+    
+    // 首先清除退出事件标志
     TaskManager::clearEvent(EVENT_RETURN_TO_MENU);
+    
+    // 重置编码器回调函数为主菜单回调（关键修复！）
+    extern void handleEncoderRotation(RotationDirection direction);
+    extern void handleEncoderButton();
+    encoder.setRotationCallback(handleEncoderRotation);
+    encoder.setButtonCallback(handleEncoderButton);
+    Utils_Logger::info("已重置编码器回调函数为主菜单回调");
+    
+    // 切换回主菜单并强制重绘整个界面
+    menuContext.switchToMainMenu();
+    menuContext.showMenu(); // 关键修复：强制重绘主菜单和三角形，确保界面正确显示
     
     // 更新系统状态返回到主菜单
     StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
     
-    // 清除所有事件标志，确保系统状态干净
+    // 清除所有事件标志
     TaskManager::clearEvent(EVENT_ALL_TASKS_CLEAR);
     
     // 更新任务状态信息
     TaskManager::markTaskAsDeleting(TaskManager::TASK_FUNCTION_C);
     
-    // 释放动态分配的内存
-    delete[] photoFiles;
-    Utils_Logger::info("功能模块C任务 %c 退出 - 图片回放功能", (char)('A' + taskId));
+    Utils_Logger::info("功能模块C任务 %c 退出 - 照片、视频回放功能", (char)('A' + taskId));
     
     // 清理任务参数
     if (params != NULL) {
@@ -771,6 +681,140 @@ bool TaskFactory::unregisterTask(TaskManager::TaskID id) {
 void TaskFactory::cleanup() {
     // 任务参数由TaskManager统一管理和清理
     Utils_Logger::info("TaskFactory cleaned up successfully");
+}
+
+/**
+ * 音频处理任务 (TASK_AUDIO_PROCESSING)
+ * 优先级: 4 (高于系统设置任务，确保不被视频任务抢占)
+ * 功能: 从环形缓冲区读取音频数据，处理后放入队列供videoRecorderLoop使用
+ */
+void taskAudioProcessing(void* params) {
+    TaskFactory::TaskParams* taskParams = static_cast<TaskFactory::TaskParams*>(params);
+    uint32_t taskId = (taskParams != NULL) ? taskParams->param1 : 0;
+    
+    Utils_Logger::info("音频处理任务 %c 启动 - 优先级: %d", 
+        (char)('A' + taskId), uxTaskPriorityGet(NULL));
+    
+    // 初始化音频队列
+    if (!g_microphoneManager.initAudioQueue()) {
+        Utils_Logger::error("音频队列初始化失败，任务退出");
+        if (taskParams != NULL) {
+            delete taskParams;
+        }
+        vTaskDelete(NULL);
+        return;
+    }
+    
+    AudioDataBlock audioBlock;
+    uint32_t blockCounter = 0;
+    size_t accumulatedSamples = 0;
+    
+    while (1) {
+        // 只有在录制状态下才处理音频数据
+        if (g_recorderState != REC_RECORDING) {
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+            continue;
+        }
+        
+        // 从环形缓冲区读取音频数据，累积到512样本
+        if (accumulatedSamples == 0) {
+            audioBlock.timestamp = millis();
+        }
+        
+        size_t samplesToRead = 512 - accumulatedSamples;
+        size_t samplesRead = g_microphoneManager.readAudioSamples(
+            audioBlock.samples + accumulatedSamples, samplesToRead);
+        
+        if (samplesRead > 0) {
+            accumulatedSamples += samplesRead;
+            
+            // 当累积满512个样本时，发送到队列
+            if (accumulatedSamples >= 512) {
+                audioBlock.count = accumulatedSamples;
+                
+                // 发送到音频队列
+                if (g_microphoneManager.sendAudioDataBlock(&audioBlock, 10 / portTICK_PERIOD_MS)) {
+                    blockCounter++;
+                    if (blockCounter % 10 == 0) {
+                        size_t queueAvailable = g_microphoneManager.getAudioQueueAvailable();
+                        size_t queueFree = g_microphoneManager.getAudioQueueFree();
+                        Utils_Logger::debug("音频队列状态: 已用=%d, 空闲=%d, 块计数=%d", 
+                            queueAvailable, queueFree, blockCounter);
+                    }
+                } else {
+                    Utils_Logger::info("音频队列满，丢弃音频块");
+                }
+                
+                // 重置累积计数
+                accumulatedSamples = 0;
+            }
+        }
+        
+        // 短暂延时，让出CPU
+        vTaskDelay(1 / portTICK_PERIOD_MS);
+    }
+    
+    // 清理任务参数
+    if (taskParams != NULL) {
+        delete taskParams;
+    }
+    
+    Utils_Logger::info("音频处理任务 %c 退出", (char)('A' + taskId));
+    
+    // 删除任务
+    vTaskDelete(NULL);
+}
+
+void taskVideoFrameCapture(void* params) {
+    TaskFactory::TaskParams* taskParams = static_cast<TaskFactory::TaskParams*>(params);
+    uint32_t taskId = (taskParams != NULL) ? taskParams->param1 : 0;
+    
+    Utils_Logger::info("视频帧获取任务 %c 启动 - 优先级: %d", 
+        (char)('A' + taskId), uxTaskPriorityGet(NULL));
+    
+    extern MJPEGEncoder mjpegEncoder;
+    const uint32_t VIDEO_CHANNEL_RECORD = 0;
+    const unsigned long FRAME_INTERVAL = 67;
+    unsigned long lastFrameTime = 0;
+    uint32_t frameCount = 0;
+    
+    while (1) {
+        if (g_recorderState != REC_RECORDING) {
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+            lastFrameTime = 0;
+            frameCount = 0;
+            continue;
+        }
+        
+        unsigned long currentTime = millis();
+        
+        if (currentTime - lastFrameTime >= FRAME_INTERVAL) {
+            uint32_t imgAddr;
+            uint32_t imgLen;
+            
+            Camera.getImage(VIDEO_CHANNEL_RECORD, &imgAddr, &imgLen);
+            
+            lastFrameTime = currentTime;
+            
+            if (imgLen > 0) {
+                mjpegEncoder.addVideoFrame((uint8_t*)imgAddr, imgLen, currentTime);
+                frameCount++;
+                
+                if (frameCount % 15 == 0) {
+                    Utils_Logger::info("视频帧获取: %d 帧", frameCount);
+                }
+            }
+        }
+        
+        vTaskDelay(1 / portTICK_PERIOD_MS);
+    }
+    
+    if (taskParams != NULL) {
+        delete taskParams;
+    }
+    
+    Utils_Logger::info("视频帧获取任务 %c 退出", (char)('A' + taskId));
+    vTaskDelete(NULL);
 }
 
 bool TaskFactory::isValidTaskID(TaskManager::TaskID id) {

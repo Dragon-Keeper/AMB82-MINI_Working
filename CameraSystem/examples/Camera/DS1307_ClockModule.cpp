@@ -22,12 +22,24 @@ bool DS1307_ClockModule::initialize() {
     Wire1.beginTransmission((uint8_t)DS1307_ADDRESS);
     uint8_t error = Wire1.endTransmission();
     
+    Serial.print("DS1307 I2C初始化结果: ");
+    switch (error) {
+        case 0: Serial.println("成功"); break;
+        case 1: Serial.println("数据溢出"); break;
+        case 2: Serial.println("NACK地址"); break;
+        case 3: Serial.println("NACK数据"); break;
+        case 4: Serial.println("其他错误"); break;
+        default: Serial.println("未知错误"); break;
+    }
+    
     if (error == 0) {
         // DS1307存在，启用时钟
         enableClock();
+        Serial.println("DS1307时钟模块初始化成功");
         return true;
     } else {
         // DS1307不存在
+        Serial.println("DS1307时钟模块初始化失败");
         return false;
     }
 }
@@ -61,6 +73,15 @@ bool DS1307_ClockModule::readTime(DS1307_Time &time) {
         if (time.seconds > 59 || time.minutes > 59 || time.hours > 23 || 
             time.date < 1 || time.date > 31 || time.month < 1 || time.month > 12) {
             readSuccess = false;
+        } else {
+            // 调试信息：打印读取到的时间
+            Serial.print("DS1307读取成功: ");
+            Serial.print(time.year); Serial.print("-");
+            Serial.print(time.month); Serial.print("-");
+            Serial.print(time.date); Serial.print(" ");
+            Serial.print(time.hours); Serial.print(":");
+            Serial.print(time.minutes); Serial.print(":");
+            Serial.println(time.seconds);
         }
     }
     

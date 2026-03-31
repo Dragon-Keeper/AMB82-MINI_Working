@@ -20,6 +20,8 @@ EncoderControl::EncoderControl() :
     m_lastButtonTime(0),
     m_buttonPressDetected(false),
     m_debounceDelay(BUTTON_DEBOUNCE_DELAY),
+    m_rotationDebounceDelay(400), // 新增：设置旋转防抖延迟为400ms（与Camera_SON项目一致）
+    m_lastRotationTime(0),        // 新增：初始化上次旋转时间
     m_rotationCallback(nullptr),
     m_buttonCallback(nullptr)
 {
@@ -80,6 +82,11 @@ int EncoderControl::getEncoderCount()
 void EncoderControl::setDebounceTime(unsigned long ms)
 {
     m_debounceDelay = ms;
+}
+
+void EncoderControl::setRotationDebounceTime(unsigned long ms)
+{
+    m_rotationDebounceDelay = ms;
 }
 
 void EncoderControl::checkButton()
@@ -153,24 +160,52 @@ void EncoderControl::handleRotation()
         m_rotationDetected = true;
     }
     
-    // 如果有旋转回调函数，立即调用
-    if (m_rotationCallback != nullptr && m_rotationDetected) {
-        m_rotationCallback(m_rotationDirection);
-    }
+    // 中断中只设置标志，不直接调用回调函数
+    // 回调函数将在主循环的checkRotation()方法中调用
     
     Utils_Logger::debug("编码器旋转检测: 方向=%d, 检测=%s", 
                        m_rotationDirection, 
                        m_rotationDetected ? "true" : "false");
 }
 
+// 检查旋转事件并调用回调函数（需要在主循环中调用）
+void EncoderControl::checkRotation()
+{
+    if (m_rotationDetected && m_rotationCallback != nullptr) {
+        // 获取当前时间进行旋转防抖处理
+        unsigned long currentTime = Utils_Timer::getCurrentTime();
+        
+        // 旋转事件防抖处理（防止重复事件导致的导航问题）
+        if (currentTime - m_lastRotationTime >= m_rotationDebounceDelay) {
+            // 更新上次旋转时间
+            m_lastRotationTime = currentTime;
+            
+            // 调用旋转回调函数
+            m_rotationCallback(m_rotationDirection);
+            
+            Utils_Logger::info("编码器旋转事件已处理: 方向=%d, 防抖延迟=%dms", 
+                             m_rotationDirection, 
+                             m_rotationDebounceDelay);
+        } else {
+            Utils_Logger::debug("编码器旋转事件被防抖忽略: 时间间隔=%dms, 阈值=%dms", 
+                              currentTime - m_lastRotationTime, 
+                              m_rotationDebounceDelay);
+        }
+        
+        // 重置旋转检测标志（无论是否防抖都重置，避免事件堆积）
+        m_rotationDetected = false;
+        m_rotationDirection = ROTATION_NONE;
+    }
+}
+
 void EncoderControl::handleButtonPress()
 {
     m_buttonPressDetected = true;
+    
+    Utils_Logger::info("编码器按钮按下");
     
     // 如果有按钮回调函数，立即调用
     if (m_buttonCallback != nullptr) {
         m_buttonCallback();
     }
-    
-    Utils_Logger::debug("按钮按下检测");
 }

@@ -1,0 +1,57 @@
+让我查看ISPControl目录下的文件结构，以便了解各个文件的作用。
+        
+            
+toolName: view_folder
+            
+status: success
+          
+c:\Users\Debug\AppData\Local\Arduino15\packages\realtek\hardware\AmebaPro2\4.0.9-build20250528\libraries\CameraSystem\Multimedia\examples\ISPControl
+          
+`ISPControl` 目录包含了一系列 Arduino 示例程序，用于演示如何控制 AmebaPro2 平台上相机的 ISP（Image Signal Processor，图像信号处理器）功能。这些示例按照不同的 ISP 功能模块进行分类，每个子目录对应一个特定的图像处理功能。
+
+## 目录结构及文件作用
+
+### 1. `Exposure/Exposure.ino`
+- **作用**：演示相机曝光控制功能
+- **主要功能**：
+  - 控制相机的曝光时间
+  - 调整自动曝光增益
+  - 设置曝光模式
+
+### 2. `ImageTuning/ImageTuning.ino`
+- **作用**：演示图像调优功能
+- **主要功能**：
+  - 调整图像的亮度、对比度、饱和度
+  - 控制图像的锐度
+  - 调整图像的色彩平衡
+
+### 3. `Mode/Mode.ino`
+- **作用**：演示相机模式控制功能
+- **主要功能**：
+  - 切换相机的工作模式
+  - 控制日夜模式切换
+  - 设置相机的电源频率（用于减少闪烁）
+
+### 4. `WhiteBalance/WhiteBalance.ino`
+- **作用**：演示相机白平衡控制功能
+- **主要功能**：
+  - 控制自动白平衡（AWB）
+  - 手动设置白平衡参数
+  - 调整红蓝平衡增益
+
+### 5. `WideDynamicRange/WideDynamicRange.ino`
+- **作用**：演示宽动态范围（WDR）控制功能
+- **主要功能**：
+  - 启用/禁用宽动态范围
+  - 调整宽动态范围级别
+  - 优化高对比度场景下的图像质量
+
+## 技术意义
+
+这些示例程序展示了如何通过 Arduino 代码直接控制相机的 ISP 参数，使开发者能够：
+
+1. 根据不同场景优化相机图像质量
+2. 实现特定应用场景下的图像效果
+3. 理解相机 ISP 的工作原理和参数调整方法
+
+通过这些示例，开发者可以学习如何编写代码来控制相机的各种图像处理功能，从而为自己的应用定制最佳的图像效果。
