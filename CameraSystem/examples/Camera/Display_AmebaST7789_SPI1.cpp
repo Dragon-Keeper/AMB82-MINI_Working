@@ -335,8 +335,9 @@ void AmebaST7789_SPI1::drawCircle(int16_t x0, int16_t y0, int16_t r) {
 /* 字符 / Print */
 void AmebaST7789_SPI1::drawChar(int16_t x, int16_t y, unsigned char c, uint16_t color, uint16_t bg, uint8_t size) {
     if ((x >= _width) || (y >= _height) || (x + 6 * size - 1) < 0 || (y + 8 * size - 1) < 0) return;
+    if (c < 0x20 || c > 0x7E) return;
     for (int i = 0; i < 6; i++) {
-        uint8_t line = (i < 5) ? font5x7[c * 5 + i] : 0x00;
+        uint8_t line = (i < 5) ? font5x7[(c - 0x20) * 5 + i] : 0x00;
         for (int j = 0; j < 8; j++, line >>= 1) {
             uint16_t col = (line & 0x01) ? color : bg;
             if (size == 1) drawPixel(x + i, y + j, col);

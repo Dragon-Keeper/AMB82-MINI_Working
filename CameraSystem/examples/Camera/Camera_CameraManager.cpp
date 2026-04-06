@@ -6,6 +6,8 @@
 
 #include "Camera_CameraManager.h"
 #include "Shared_GlobalDefines.h"
+#include "System_ConfigManager.h"
+#include <cstring>
 
 // 相机配置对象（在Camera.ino中定义）
 extern VideoSetting configPreview;
@@ -14,10 +16,67 @@ extern VideoSetting configStill;
 // 静态指针，用于JPEGDraw回调访问TFTManager
 static Display_TFTManager* s_tftManagerForJPEG = nullptr;
 
-// JPEGDraw回调函数
+// 预览画面显示区域配置（默认值，可通过setPreviewDisplayMode动态修改）
+static int s_previewDisplayWidth = 320;     // 屏幕上的显示宽度（默认全屏，旋转后屏幕宽320）
+static const int PREVIEW_DISPLAY_HEIGHT = 240;   // 屏幕上的显示高度
+static const int FULL_SCREEN_WIDTH = 320;        // 全屏模式宽度（旋转后实际宽度=320）
+static const int PANEL_MODE_WIDTH = 195;         // 参数设置面板模式宽度（与PANEL_X对齐，右侧留空间给面板）
+static const int MCU_BLOCK_SIZE = 16;             // MCU块大小
+
+// 帧缓冲区 - 使用最大尺寸（全屏）分配
+static uint16_t s_frameBuffer[FULL_SCREEN_WIDTH * PREVIEW_DISPLAY_HEIGHT];
+static bool s_frameBufferReady = false;
+
+// JPEGDraw回调函数 - 将MCU块写入帧缓冲区（使用动态宽度）
 static int CameraManager_JPEGDraw(JPEGDRAW *pDraw) {
     if (s_tftManagerForJPEG != nullptr) {
-        s_tftManagerForJPEG->drawBitmap(pDraw->x, pDraw->y, pDraw->iWidth, pDraw->iHeight, pDraw->pPixels);
+        int x = pDraw->x;
+        int y = pDraw->y;
+        int width = pDraw->iWidth;
+        int height = pDraw->iHeight;
+        
+        // 使用动态配置的显示宽度
+        if (x >= s_previewDisplayWidth) {
+            return 1;
+        }
+        
+        // 简单的边界检查
+        if (y >= PREVIEW_DISPLAY_HEIGHT) {
+            return 1;
+        }
+        
+        if (x < 0) {
+            width += x;
+            x = 0;
+        }
+        
+        if (width <= 0 || height <= 0) {
+            return 1;
+        }
+        
+        // 确保不超出屏幕边界
+        int drawWidth = width;
+        int drawHeight = height;
+        
+        if (x + drawWidth > s_previewDisplayWidth) {
+            drawWidth = s_previewDisplayWidth - x;
+        }
+        
+        if (y + drawHeight > PREVIEW_DISPLAY_HEIGHT) {
+            drawHeight = PREVIEW_DISPLAY_HEIGHT - y;
+        }
+        
+        // 将MCU块数据拷贝到帧缓冲区（使用动态宽度）
+        for (int row = 0; row < drawHeight; row++) {
+            int srcOffset = row * width;
+            int dstOffset = (y + row) * s_previewDisplayWidth + x;
+            
+            for (int col = 0; col < drawWidth; col++) {
+                s_frameBuffer[dstOffset + col] = pDraw->pPixels[srcOffset + col];
+            }
+        }
+        
+        s_frameBufferReady = true;
     }
     return 1;
 }
@@ -38,6 +97,15 @@ CameraManager::CameraManager()
     , m_isCapturing(false)
     , m_captureRequested(false)
     , m_initialized(false)
+    , m_ispConfig(nullptr)
+    , m_currentExposureMode(ISP_DEFAULT_EXPOSURE_MODE)
+    , m_currentBrightness(ISP_DEFAULT_BRIGHTNESS)
+    , m_currentContrast(ISP_DEFAULT_CONTRAST)
+    , m_currentSaturation(ISP_DEFAULT_SATURATION)
+    , m_currentAWBMode(ISP_DEFAULT_AWB_MODE)
+    , m_ispInitialized(false)
+    , m_voeReady(false)
+    , m_ispConfigManager(nullptr)
 {
     m_previewBuffer.imgAddr = 0;
     m_previewBuffer.imgLen = 0;
@@ -70,8 +138,46 @@ bool CameraManager::init(Display_TFTManager& tftMgr, Display_FontRenderer& fontR
     Camera.configVideoChannel(PREVIEW_CH, configPreview);
     Camera.configVideoChannel(STILL_CH, configStill);
     Camera.videoInit();
+    
+    // 等待 VOE 硬件完全初始化
+    // videoInit() 是异步的，内部会触发 video_pre_init_procedure
+    // 从日志分析，该过程需要约 55ms (hal_voe_send2voe too long 54867us)
+    // 为确保稳定，等待 200ms 让所有异步操作完成
+    Utils_Timer::delayMs(200);
+    m_voeReady = true;
     Utils_Logger::info("Camera hardware initialized");
 
+    // 初始化 ISP 配置（只创建对象和加载参数，不立即应用到底层硬件）
+    Utils_Logger::info("Initializing ISP configuration...");
+    
+    // 初始化 ISP 配置管理器
+    m_ispConfigManager = new ISPConfigManager();
+    if (m_ispConfigManager != nullptr) {
+        m_ispConfigManager->init(*m_sdCardManager);
+        
+        // 优先从ConfigManager读取用户保存的参数（与UI面板保持一致）
+        if (ConfigManager::isInitialized()) {
+            m_currentExposureMode = ConfigManager::getValue(ConfigManager::CONFIG_EXPOSURE_MODE);
+            m_currentBrightness = ConfigManager::getValue(ConfigManager::CONFIG_BRIGHTNESS);
+            m_currentContrast = ConfigManager::getValue(ConfigManager::CONFIG_CONTRAST);
+            m_currentSaturation = ConfigManager::getValue(ConfigManager::CONFIG_SATURATION);
+            m_currentAWBMode = m_ispConfigManager->getAWBMode();
+            
+            Utils_Logger::info("Loaded parameters from ConfigManager:");
+        } else {
+            m_currentExposureMode = m_ispConfigManager->getExposureMode();
+            m_currentBrightness = m_ispConfigManager->getBrightness();
+            m_currentContrast = m_ispConfigManager->getContrast();
+            m_currentSaturation = m_ispConfigManager->getSaturation();
+            m_currentAWBMode = m_ispConfigManager->getAWBMode();
+            
+            Utils_Logger::info("Loaded parameters from ISPConfigManager (defaults)");
+        }
+    }
+    
+    // 创建 CameraSetting 对象但不应用参数（延迟到 VOE 就绪后）
+    initISP();
+    
     m_initialized = true;
     Utils_Logger::info("CameraManager initialized successfully");
     return true;
@@ -88,6 +194,7 @@ void CameraManager::cleanup() {
     }
     
     m_initialized = false;
+    m_voeReady = false;
 }
 
 bool CameraManager::startPreview() {
@@ -108,15 +215,22 @@ bool CameraManager::startPreview() {
     m_tftManager->fillScreen(ST7789_BLACK);
 
     // 重新配置视频通道，确保使用正确的配置（解决从视频模式返回后的栅格问题）
-    Utils_Logger::info("Reconfiguring camera channels for photo mode...");
+    // Utils_Logger::info("Reconfiguring camera channels for photo mode...");
     Camera.configVideoChannel(PREVIEW_CH, configPreview);
     Camera.configVideoChannel(STILL_CH, configStill);
     Camera.videoInit();
+    
+    // 等待 VOE 硬件就绪（videoInit() 异步初始化需要时间）
+    Utils_Timer::delayMs(200);
+    m_voeReady = true;
 
     Camera.channelEnd(CHANNEL_PREVIEW);
     Camera.channelBegin(CHANNEL_PREVIEW);
 
-    Utils_Logger::info("Camera preview started");
+    // 在 channelBegin() 之后应用 ISP 参数，确保 VOE 完全就绪
+    applyISPSettings();
+
+    // Utils_Logger::info("Camera preview started");
     return true;
 }
 
@@ -140,6 +254,16 @@ void CameraManager::stopPreview() {
     Utils_Logger::info("Camera preview stopped");
 }
 
+void CameraManager::setPreviewDisplayMode(bool fullWidth) {
+    if (fullWidth) {
+        s_previewDisplayWidth = FULL_SCREEN_WIDTH;
+        Utils_Logger::info("Preview display mode set to FULL SCREEN (%dx%d)", s_previewDisplayWidth, PREVIEW_DISPLAY_HEIGHT);
+    } else {
+        s_previewDisplayWidth = PANEL_MODE_WIDTH;
+        Utils_Logger::info("Preview display mode set to PANEL MODE (%dx%d)", s_previewDisplayWidth, PREVIEW_DISPLAY_HEIGHT);
+    }
+}
+
 void CameraManager::processPreviewFrame() {
     if (!m_previewActive) {
         return;
@@ -161,6 +285,10 @@ void CameraManager::processPreviewFrame() {
     if (m_previewBuffer.imgLen > 0) {
         startTime = Utils_Timer::getCurrentTime();
         
+        // 清空帧缓冲区（用黑色填充）
+        memset(s_frameBuffer, 0, sizeof(s_frameBuffer));
+        s_frameBufferReady = false;
+        
         if (m_jpegDecoder->openFLASH((uint8_t *)m_previewBuffer.imgAddr, m_previewBuffer.imgLen, CameraManager_JPEGDraw)) {
             // 添加JPEG解码超时检查
             if (Utils_Timer::getCurrentTime() - startTime > TIMEOUT_MS) {
@@ -171,6 +299,11 @@ void CameraManager::processPreviewFrame() {
             
             m_jpegDecoder->decode(0, 0, JPEG_SCALE_HALF);
             m_jpegDecoder->close();
+            
+            // 解码完成后，一次性将整个帧缓冲区发送到屏幕（使用动态宽度）
+            if (s_frameBufferReady && s_tftManagerForJPEG != nullptr) {
+                s_tftManagerForJPEG->drawBitmap(0, 0, s_previewDisplayWidth, PREVIEW_DISPLAY_HEIGHT, s_frameBuffer);
+            }
         }
     }
 
@@ -188,12 +321,30 @@ bool CameraManager::capturePhoto() {
 
     const uint32_t TIMEOUT_MS = 5000; // 5秒总超时
     uint32_t startTime = Utils_Timer::getCurrentTime();
+    uint32_t delayStartTime = 0; // 提前声明，避免被 goto 跨越
+
+    // 阶段二：拍照前应用 ISP 设置
+    if (m_ispInitialized && m_ispConfig) {
+        Utils_Logger::info("  0. Applying ISP settings...");
+        applyISPSettings();
+        
+        // 等待 ISP 参数生效（100ms）
+        uint32_t ispDelayStartTime = Utils_Timer::getCurrentTime();
+        while (Utils_Timer::getCurrentTime() - ispDelayStartTime < 100) {
+            if (Utils_Timer::getCurrentTime() - startTime > TIMEOUT_MS) {
+                Utils_Logger::error("Capture timeout during ISP setup");
+                goto capture_cleanup;
+            }
+            vTaskDelay(1);
+        }
+        Utils_Logger::info("     ISP settings applied successfully");
+    }
 
     Camera.channelBegin(CHANNEL_STILL);
     Utils_Logger::info("  1. Still channel opened");
     
     // 带超时检查的延迟
-    uint32_t delayStartTime = Utils_Timer::getCurrentTime();
+    delayStartTime = Utils_Timer::getCurrentTime();
     while (Utils_Timer::getCurrentTime() - delayStartTime < 200) {
         // 检查总超时
         if (Utils_Timer::getCurrentTime() - startTime > TIMEOUT_MS) {
@@ -358,3 +509,186 @@ const CameraManager::ImageBuffer& CameraManager::getStillBuffer() const {
 SDCardManager& CameraManager::getSDCardManager() {
     return *m_sdCardManager;
 }
+
+// ============================================
+// ISP 配置方法实现 - 阶段一基础集成
+// ============================================
+
+void CameraManager::initISP() {
+    if (m_ispInitialized) {
+        // Utils_Logger::info("ISP already initialized");
+        return;
+    }
+
+    // 创建 CameraSetting 对象（使用默认构造函数）
+    m_ispConfig = new CameraSetting();
+    if (m_ispConfig == nullptr) {
+        Utils_Logger::error("Failed to create CameraSetting object");
+        return;
+    }
+
+    // 不在此处应用 ISP 参数，延迟到 startPreview() 或 channelBegin() 之后
+    // 这样可以确保 VOE 硬件完全就绪，避免 "VOE not init" 警告
+    // applyISPSettings();  // 已移除：延迟应用
+
+    m_ispInitialized = true;
+    // Utils_Logger::info("ISP initialized (parameters will be applied later)");
+}
+
+void CameraManager::applyISPSettings() {
+    if (m_ispConfig == nullptr) {
+        return;
+    }
+
+    if (!m_voeReady) {
+        return;
+    }
+
+    // 应用所有当前 ISP 设置
+    m_ispConfig->setExposureMode(m_currentExposureMode);
+    m_ispConfig->setBrightness(m_currentBrightness);
+    m_ispConfig->setContrast(m_currentContrast);
+    m_ispConfig->setSaturation(m_currentSaturation);
+    m_ispConfig->setAWB(m_currentAWBMode);
+}
+
+bool CameraManager::isVOEReady() const {
+    return m_voeReady;
+}
+
+void CameraManager::setVOEReady(bool ready) {
+    m_voeReady = ready;
+    // 不在此处立即调用 applyISPSettings()
+    // 因为 videoInit() 是异步的，返回后 VOE 可能仍在初始化中
+    // 应该由调用者在合适的时机（如 channelBegin() 之后）手动调用 applyISPSettings()
+}
+
+void CameraManager::setExposureMode(int mode) {
+    if (!m_ispInitialized) {
+        // Utils_Logger::info("ISP not initialized");
+        return;
+    }
+
+    if (mode < 0 || mode > 1) {
+        Utils_Logger::error("Invalid exposure mode: %d (must be 0 or 1)", mode);
+        return;
+    }
+
+    m_currentExposureMode = mode;
+    if (m_ispConfig && m_voeReady) {
+        m_ispConfig->setExposureMode(mode);
+    }
+    // Utils_Logger::info("Exposure mode set to: %d", mode);
+}
+
+int CameraManager::getExposureMode() const {
+    return m_currentExposureMode;
+}
+
+void CameraManager::setBrightness(int value) {
+    if (!m_ispInitialized) {
+        // Utils_Logger::info("ISP not initialized");
+        return;
+    }
+
+    if (value < -64 || value > 64) {
+        Utils_Logger::error("Invalid brightness: %d (must be -64~64)", value);
+        return;
+    }
+
+    m_currentBrightness = value;
+    if (m_ispConfig && m_voeReady) {
+        m_ispConfig->setBrightness(value);
+    }
+    // Utils_Logger::info("Brightness set to: %d", value);
+}
+
+int CameraManager::getBrightness() const {
+    return m_currentBrightness;
+}
+
+void CameraManager::setContrast(int value) {
+    if (!m_ispInitialized) {
+        // Utils_Logger::info("ISP not initialized");
+        return;
+    }
+
+    if (value < 0 || value > 100) {
+        Utils_Logger::error("Invalid contrast: %d (must be 0~100)", value);
+        return;
+    }
+
+    m_currentContrast = value;
+    if (m_ispConfig && m_voeReady) {
+        m_ispConfig->setContrast(value);
+    }
+    // Utils_Logger::info("Contrast set to: %d", value);
+}
+
+int CameraManager::getContrast() const {
+    return m_currentContrast;
+}
+
+void CameraManager::setSaturation(int value) {
+    if (!m_ispInitialized) {
+        // Utils_Logger::info("ISP not initialized");
+        return;
+    }
+
+    if (value < 0 || value > 100) {
+        Utils_Logger::error("Invalid saturation: %d (must be 0~100)", value);
+        return;
+    }
+
+    m_currentSaturation = value;
+    if (m_ispConfig && m_voeReady) {
+        m_ispConfig->setSaturation(value);
+    }
+    // Utils_Logger::info("Saturation set to: %d", value);
+}
+
+int CameraManager::getSaturation() const {
+    return m_currentSaturation;
+}
+
+void CameraManager::setAWBMode(int mode) {
+    if (!m_ispInitialized) {
+        // Utils_Logger::info("ISP not initialized");
+        return;
+    }
+
+    if (mode < 0 || mode > 1) {
+        Utils_Logger::error("Invalid AWB mode: %d (must be 0 or 1)", mode);
+        return;
+    }
+
+    m_currentAWBMode = mode;
+    if (m_ispConfig && m_voeReady) {
+        m_ispConfig->setAWB(mode);
+    }
+    // Utils_Logger::info("AWB mode set to: %d", mode);
+}
+
+int CameraManager::getAWBMode() const {
+    return m_currentAWBMode;
+}
+
+void CameraManager::resetISP() {
+    if (!m_ispInitialized) {
+        Utils_Logger::info("ISP not initialized");
+        return;
+    }
+
+    // 重置为默认值
+    m_currentExposureMode = ISP_DEFAULT_EXPOSURE_MODE;
+    m_currentBrightness = ISP_DEFAULT_BRIGHTNESS;
+    m_currentContrast = ISP_DEFAULT_CONTRAST;
+    m_currentSaturation = ISP_DEFAULT_SATURATION;
+    m_currentAWBMode = ISP_DEFAULT_AWB_MODE;
+
+    // 应用默认设置
+    applyISPSettings();
+
+    Utils_Logger::info("ISP settings reset to defaults");
+}
+

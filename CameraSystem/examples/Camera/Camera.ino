@@ -56,6 +56,7 @@
 #include "Menu_TriangleController.h"
 #include "Menu_MenuItems.h"
 #include "Menu_MenuContext.h"
+#include "Menu_ParamSettings.h"
 
 // 预定义字符串常量已移动到Display_FontRenderer模块中
 
@@ -98,9 +99,6 @@ int ntpServerCount = sizeof(ntpServers) / sizeof(ntpServers[0]);
 // NTP配置
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP);
-
-// 全局对象 - 使用TFT管理器
-Display_TFTManager tftManager;
 
 // 函数前向声明
 // 编码器回调函数（在Menu_MenuContext.cpp中实现）
@@ -469,8 +467,9 @@ void taskTimeSync(void* parameters) {
 
 void loop() {
     // 模块化移植：阶段四 - 使用EncoderControl类检测按钮和旋转状态
-    // 只在主菜单模式下检查编码器，避免与其他任务的编码器检查冲突！
-    if (StateManager::getInstance().getCurrentState() == STATE_MAIN_MENU) {
+    // 在主菜单和子菜单模式下都检查编码器，确保子菜单也能正常工作！
+    if (StateManager::getInstance().getCurrentState() == STATE_MAIN_MENU || 
+        StateManager::getInstance().getCurrentState() == STATE_SUB_MENU) {
         encoder.checkButton();
         encoder.checkRotation();
     }
@@ -552,6 +551,13 @@ void loop() {
                     Utils_Logger::info("主菜单C位置：创建图片回放任务");
                     // 只有当任务创建成功时，才更新系统状态
                     if (TaskFactory::createDefaultTask(TaskManager::TASK_FUNCTION_C)) {
+                        StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
+                    }
+                } else if (currentMenuItem == POS_D) {
+                    // D位置按下：创建ISP配置任务
+                    Utils_Logger::info("主菜单D位置：创建ISP配置任务");
+                    // 只有当任务创建成功时，才更新系统状态
+                    if (TaskFactory::createDefaultTask(TaskManager::TASK_FUNCTION_D)) {
                         StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
                     }
                 } else if (currentMenuItem == POS_F) {

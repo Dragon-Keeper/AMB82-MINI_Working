@@ -16,7 +16,10 @@ typedef enum {
     MENU_ITEM_TYPE_SUBMENU,     // 子菜单
     MENU_ITEM_TYPE_SETTING,     // 设置项
     MENU_ITEM_TYPE_TOGGLE,      // 开关项
-    MENU_ITEM_TYPE_VALUE        // 数值项
+    MENU_ITEM_TYPE_VALUE,       // 数值项
+    MENU_ITEM_TYPE_PARAM_SETTINGS,  // 参数设置菜单
+    MENU_ITEM_TYPE_EXPOSURE_MODE,   // 曝光模式选择
+    MENU_ITEM_TYPE_SLIDER       // 滑动条项
 } MenuItemType;
 
 // 菜单项操作类型
@@ -28,7 +31,14 @@ typedef enum {
     MENU_OPERATION_SETTINGS,    // 设置
     MENU_OPERATION_ABOUT,       // 关于
     MENU_OPERATION_EXIT,        // 退出
-    MENU_OPERATION_BACK         // 返回
+    MENU_OPERATION_BACK,        // 返回
+    MENU_OPERATION_PARAM_SETTINGS,  // 参数设置
+    MENU_OPERATION_EXPOSURE_MODE,   // 曝光模式设置
+    MENU_OPERATION_BRIGHTNESS,      // 亮度设置
+    MENU_OPERATION_CONTRAST,        // 对比度设置
+    MENU_OPERATION_SATURATION,      // 饱和度设置
+    MENU_OPERATION_RESET_DEFAULTS,  // 重置默认参数
+    MENU_OPERATION_EXPOSURE_SELECT   // 曝光模式选择确认
 } MenuOperation;
 
 // 菜单项结构
@@ -48,5 +58,6 @@ typedef struct {
 // 全局菜单配置声明
 extern const MenuConfig mainMenuConfig;
 extern const MenuConfig subMenuConfig;
+extern const MenuConfig paramSettingsConfig;
 
 #endif // MENU_MENU_ITEMS_H

@@ -22,6 +22,9 @@
 class CameraManager;
 extern CameraManager cameraManager;
 
+// 前向声明参数设置菜单类
+class ParamSettingsMenu;
+
 // 菜单事件类型
 typedef enum {
     MENU_EVENT_NONE = 0,
@@ -38,12 +41,18 @@ typedef enum {
 void handleEncoderRotation(RotationDirection direction);
 void handleEncoderButton();
 
+// 前向声明
+class Display_FontRenderer;
+extern Display_FontRenderer fontRenderer;
+
 // 菜单上下文类，协调菜单管理器和三角形控制器
 class MenuContext {
 private:
     MenuManager &menuManager;         // 菜单管理器引用
     TriangleController &triangleController; // 三角形控制器引用
+    ParamSettingsMenu *paramSettingsMenu; // 参数设置菜单指针
     bool isInitialized = false;
+    bool inParamSettings = false;     // 是否在参数设置菜单中
     
     // 菜单项数量配置
     int maxMenuItems = 6; // A-F共6个选项
@@ -51,7 +60,8 @@ private:
 public:
     // 构造函数
     MenuContext(MenuManager &menuManager, TriangleController &triangleController)
-        : menuManager(menuManager), triangleController(triangleController) {}
+        : menuManager(menuManager), triangleController(triangleController), 
+          paramSettingsMenu(nullptr), inParamSettings(false) {}
     
     // 初始化菜单上下文
     bool init();

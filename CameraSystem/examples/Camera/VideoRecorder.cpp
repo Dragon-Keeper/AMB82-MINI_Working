@@ -21,6 +21,9 @@ extern Display_TFTManager tftManager;
 extern JPEGDEC jpeg;
 extern EncoderControl encoder;
 
+// 媒体文件列表最大数量（定义在文件顶部，确保所有函数可用）
+#define MAX_MEDIA_FILES 500
+
 // 前向声明
 void cleanupThumbnailCache(void);
 void cleanupThumbnailCacheItems(uint32_t count);
@@ -97,10 +100,87 @@ static int32_t jpegSeekCallback(JPEGFILE *pFile, int32_t lPos) {
     return lPos;
 }
 
-// JPEG解码回调函数
+// JPEG解码回调函数（直接绘制模式 - 用于非预览场景如缩略图等）
 static int JPEGDraw(JPEGDRAW *pDraw) {
-    // 绘制JPEG图像
     tftManager.drawBitmap(pDraw->x, pDraw->y, pDraw->iWidth, pDraw->iHeight, pDraw->pPixels);
+    return 1;
+}
+
+// ============================================
+// 视频预览帧缓冲区系统（与拍照模式一致的高性能实现）
+// 使用帧缓冲区收集完整画面后一次性DMA传输，大幅提升帧率
+// ============================================
+#define PREVIEW_FB_WIDTH   320
+#define PREVIEW_FB_HEIGHT  240
+
+static uint16_t s_previewFrameBuffer[PREVIEW_FB_WIDTH * PREVIEW_FB_HEIGHT];
+static bool s_previewFrameReady = false;
+
+// ============================================
+// 视频回放帧缓冲区系统（高性能回放，整帧一次DMA传输）
+// 1280x720视频以1/4缩放解码为320x180，写入帧缓冲区后一次性绘制
+// ============================================
+#define PLAYBACK_FB_WIDTH   320
+#define PLAYBACK_FB_HEIGHT  180
+
+static uint16_t s_playbackFrameBuffer[PLAYBACK_FB_WIDTH * PLAYBACK_FB_HEIGHT];
+static bool s_playbackFrameReady = false;
+
+static int JPEGDrawForPlayback(JPEGDRAW *pDraw) {
+    int x = pDraw->x;
+    int y = pDraw->y;
+    int width = pDraw->iWidth;
+    int height = pDraw->iHeight;
+
+    if (x >= PLAYBACK_FB_WIDTH) return 1;
+    if (y >= PLAYBACK_FB_HEIGHT) return 1;
+    if (x < 0) { width += x; x = 0; }
+    if (width <= 0 || height <= 0) return 1;
+
+    int drawWidth = width;
+    int drawHeight = height;
+    if (x + drawWidth > PLAYBACK_FB_WIDTH) drawWidth = PLAYBACK_FB_WIDTH - x;
+    if (y + drawHeight > PLAYBACK_FB_HEIGHT) drawHeight = PLAYBACK_FB_HEIGHT - y;
+
+    for (int row = 0; row < drawHeight; row++) {
+        int srcOffset = row * width;
+        int dstOffset = (y + row) * PLAYBACK_FB_WIDTH + x;
+        for (int col = 0; col < drawWidth; col++) {
+            s_playbackFrameBuffer[dstOffset + col] = pDraw->pPixels[srcOffset + col];
+        }
+    }
+
+    s_playbackFrameReady = true;
+    return 1;
+}
+
+// 视频预览专用JPEGDraw回调 - 将MCU块写入帧缓冲区
+static int JPEGDrawForPreview(JPEGDRAW *pDraw) {
+    int x = pDraw->x;
+    int y = pDraw->y;
+    int width = pDraw->iWidth;
+    int height = pDraw->iHeight;
+    
+    if (x >= PREVIEW_FB_WIDTH) return 1;
+    if (y >= PREVIEW_FB_HEIGHT) return 1;
+    
+    if (x < 0) { width += x; x = 0; }
+    if (width <= 0 || height <= 0) return 1;
+    
+    int drawWidth = width;
+    int drawHeight = height;
+    if (x + drawWidth > PREVIEW_FB_WIDTH) drawWidth = PREVIEW_FB_WIDTH - x;
+    if (y + drawHeight > PREVIEW_FB_HEIGHT) drawHeight = PREVIEW_FB_HEIGHT - y;
+    
+    for (int row = 0; row < drawHeight; row++) {
+        int srcOffset = row * width;
+        int dstOffset = (y + row) * PREVIEW_FB_WIDTH + x;
+        for (int col = 0; col < drawWidth; col++) {
+            s_previewFrameBuffer[dstOffset + col] = pDraw->pPixels[srcOffset + col];
+        }
+    }
+    
+    s_previewFrameReady = true;
     return 1;
 }
 
@@ -139,29 +219,45 @@ void videoRecorderInit(void) {
     Serial.begin(115200);
     
     // DS1307时钟模块初始化
-    Utils_Logger::info("Initializing DS1307 Clock Module...");
+    // Utils_Logger::info("Initializing DS1307 Clock Module...");
     
     // 系统上电后立即读取一次DS1307时间，确保时间戳可用
     DS1307_Time initialTime;
     readDS1307Time(initialTime);
     
     // 音视频采集引脚初始化
-    Utils_Logger::info("Initializing Audio/Video Pins...");
+    // Utils_Logger::info("Initializing Audio/Video Pins...");
     
     // 存储初始化 (通过SDCardManager)
-    Utils_Logger::info("Initializing Storage...");
+    // Utils_Logger::info("Initializing Storage...");
+    if (!sdCardManager.isInitialized()) {
+        if (!sdCardManager.init()) {
+            Utils_Logger::error("SD card initialization failed in VideoRecorder");
+        } else {
+            // Utils_Logger::info("SD card initialized successfully in VideoRecorder");
+        }
+    } else {
+        // Utils_Logger::info("SD card already initialized");
+    }
     
     // 配置相机视频通道
-    Utils_Logger::info("Configuring Camera Video Channels...");
+    // Utils_Logger::info("Configuring Camera Video Channels...");
     // 配置录制通道（JPEG编码）
     Camera.configVideoChannel(VIDEO_CHANNEL_RECORD, configV);
     // 配置预览通道
     Camera.configVideoChannel(VIDEO_CHANNEL_PREVIEW, configVPreview);
     Camera.videoInit();
     
+    // 等待 VOE 硬件完全初始化（videoInit() 异步，需等待 video_pre_init_procedure 完成）
+    Utils_Timer::delayMs(200);
+    cameraManager.setVOEReady(true);
+    
     // 启动预览通道，确保idle状态下也能显示预览画面
-    Utils_Logger::info("Starting Preview Channel...");
+    // Utils_Logger::info("Starting Preview Channel...");
     Camera.channelBegin(VIDEO_CHANNEL_PREVIEW);
+    
+    // 在 channelBegin() 之后应用 ISP 参数，确保 VOE 完全就绪
+    cameraManager.applyISPSettings();
     
     // 重置录制状态
     g_recorderState = REC_IDLE;
@@ -170,8 +266,8 @@ void videoRecorderInit(void) {
     encoder.setButtonCallback(handleVideoEncoderButton);
     
     // 初始化缩略图缓存
-    Utils_Logger::info("Initializing Thumbnail Cache...");
-    initThumbnailCache(10); // 初始缓存大小为10
+    // Utils_Logger::info("Initializing Thumbnail Cache...");
+    initThumbnailCache(MAX_MEDIA_FILES);
     
     Utils_Logger::info("Video Recorder Initialized Successfully");
 
@@ -181,18 +277,19 @@ void videoRecorderCleanup(void) {
     Utils_Logger::info("Cleaning up Video Recorder...");
     
     // 停止并清理预览通道
-    Utils_Logger::info("Stopping Preview Channel...");
+    // Utils_Logger::info("Stopping Preview Channel...");
     Camera.channelEnd(VIDEO_CHANNEL_PREVIEW);
     
     // 停止视频初始化（释放视频资源）
-    Utils_Logger::info("Stopping Video Initialization...");
+    // Utils_Logger::info("Stopping Video Initialization...");
+    cameraManager.setVOEReady(false);
     // 注意：Camera.videoEnd()可能不存在，这里我们只停止通道
     
     // 清理缩略图缓存
-    Utils_Logger::info("Cleaning up Thumbnail Cache...");
+    // Utils_Logger::info("Cleaning up Thumbnail Cache...");
     cleanupThumbnailCache();
     
-    Utils_Logger::info("Video Recorder Cleaned Up Successfully");
+    // Utils_Logger::info("Video Recorder Cleaned Up Successfully");
 }
 
 void startVideoRecording(void) {
@@ -228,14 +325,14 @@ void startVideoRecording(void) {
     
     // 创建视频帧获取RTOS任务（优先级5，高于音频处理任务的优先级4）
     TaskManager::createTask(TaskManager::TASK_VIDEO_FRAME_CAPTURE);
-    Utils_Logger::info("Video frame capture RTOS task created (priority 5)");
+    // Utils_Logger::info("Video frame capture RTOS task created (priority 5)");
     
     // 启动音频采集（在视频通道启动后再启动音频，确保同步开始）
     if (!g_microphoneManager.startAVIRecording()) {
         Utils_Logger::info("Audio recording init failed, continuing with video only");
     } else {
         TaskManager::createTask(TaskManager::TASK_AUDIO_PROCESSING);
-        Utils_Logger::info("Audio processing RTOS task created (priority 4)");
+        // Utils_Logger::info("Audio processing RTOS task created (priority 4)");
     }
     
     // 读取DS1307获取录制开始时间戳
@@ -245,16 +342,13 @@ void startVideoRecording(void) {
     // 打印开始录制日志
     char timeStamp[32];
     formatTimeStamp(timeStamp, sizeof(timeStamp), startTime);
-    Utils_Logger::info("Video recording with audio started at: %s", timeStamp);
-    Utils_Logger::info("Recording file: %s", recordingFileName);
-    
-    Utils_Logger::info("Video Recording with Audio Started Successfully");
+    Utils_Logger::info("Video recording started at: %s, file: %s", timeStamp, recordingFileName);
 }
 
 void stopVideoRecording(void) {
     // 即使状态不是REC_RECORDING，也尝试停止录制，提高用户体验
     if (g_recorderState != REC_RECORDING) {
-        Utils_Logger::info("Video Recorder is not in RECORDING state, attempting to clean up...");
+        // Utils_Logger::info("Video Recorder is not in RECORDING state, attempting to clean up...");
         // 仍然执行停止逻辑，确保资源被正确释放
     }
     
@@ -265,17 +359,17 @@ void stopVideoRecording(void) {
     
     // 删除视频帧获取RTOS任务
     TaskManager::deleteTask(TaskManager::TASK_VIDEO_FRAME_CAPTURE);
-    Utils_Logger::info("Video frame capture RTOS task deleted");
+    // Utils_Logger::info("Video frame capture RTOS task deleted");
     
     // 删除音频处理RTOS任务（停止音频采集）
     TaskManager::deleteTask(TaskManager::TASK_AUDIO_PROCESSING);
-    Utils_Logger::info("Audio processing RTOS task deleted");
+    // Utils_Logger::info("Audio processing RTOS task deleted");
     
     // 不再刷新剩余音频数据，避免音画不同步
     // 直接丢弃队列中的剩余数据，确保音视频同步结束
     size_t queueAvailable = g_microphoneManager.getAudioQueueAvailable();
     if (queueAvailable > 0) {
-        Utils_Logger::info("Discarding remaining audio samples from queue: %d blocks", queueAvailable);
+        // Utils_Logger::info("Discarding remaining audio samples from queue: %d blocks", queueAvailable);
     }
     
     // 停止音频采集
@@ -291,14 +385,13 @@ void stopVideoRecording(void) {
     // 打印停止录制日志
     char timeStamp[32];
     formatTimeStamp(timeStamp, sizeof(timeStamp), endTime);
-    Utils_Logger::info("Video recording with audio stopped at: %s", timeStamp);
-    Utils_Logger::info("Recording file saved: %s", recordingFileName);
+    Utils_Logger::info("Video recording stopped at: %s, file: %s", timeStamp, recordingFileName);
     
     // 确保更新录制状态
     g_recorderState = REC_IDLE;
     updatemodifiedtime = true;
     
-    Utils_Logger::info("Video Recording with Audio Stopped and File Saved Successfully");
+    // Utils_Logger::info("Video Recording with Audio Stopped and File Saved Successfully");
 }
 
 void videoRecorderLoop(void) {
@@ -318,30 +411,26 @@ void videoRecorderLoop(void) {
             mjpegEncoder.addAudioFrame((const uint8_t*)audioBlock.samples, audioBytes, audioBlock.timestamp);
             audioBlockCounter++;
 
-            if (audioBlockCounter % 10 == 0) {
-                Utils_Logger::info("Audio blocks written: %d", audioBlockCounter);
-            }
+            // if (audioBlockCounter % 10 == 0) {
+            //     Utils_Logger::info("Audio blocks written: %d", audioBlockCounter);
+            // }
         }
     }
 
     if (currentMillis - lastAudioDebugTime >= 1000) {
-        size_t queueAvailable = g_microphoneManager.getAudioQueueAvailable();
-        Utils_Logger::info("Audio queue: available=%d, blocks=%d", queueAvailable, audioBlockCounter);
+        // size_t queueAvailable = g_microphoneManager.getAudioQueueAvailable();
+        // Utils_Logger::info("Audio queue: available=%d, blocks=%d", queueAvailable, audioBlockCounter);
         lastAudioDebugTime = currentMillis;
     }
 }
 
 void processPreviewFrame(void) {
-    // 只有在录制状态或空闲状态才处理预览帧
     if (g_recorderState != REC_RECORDING && g_recorderState != REC_IDLE) {
         return;
     }
 
-    // 限制预览帧处理频率，降低CPU和内存占用
-    static unsigned long lastPreviewTime = 0;
     unsigned long currentMillis = millis();
     
-    // 录制指示灯状态管理
     static unsigned long lastBlinkTime = 0;
     static bool dotVisible = false;
     bool shouldDrawDot = false;
@@ -354,64 +443,45 @@ void processPreviewFrame(void) {
         shouldDrawDot = dotVisible;
     }
     
-    // 每100毫秒处理一次预览帧（约10fps）
-    if (currentMillis - lastPreviewTime < 100) {
-        return;
-    }
-    
-    lastPreviewTime = currentMillis;
-
-    // 获取预览帧
     uint32_t imgAddr;
     uint32_t imgLen;
     
-    // 增加重试机制，确保能获取到预览帧
     int retryCount = 0;
     const int MAX_RETRIES = 3;
     
     do {
-        // 获取预览帧
         Camera.getImage(VIDEO_CHANNEL_PREVIEW, &imgAddr, &imgLen);
-        
-        // 如果获取到有效帧，退出重试
-        if (imgLen > 0) {
-            break;
-        }
-        
-        // 重试前短暂延迟
-        if (retryCount < MAX_RETRIES - 1) {
-            delay(10);
-        }
-        
+        if (imgLen > 0) break;
+        if (retryCount < MAX_RETRIES - 1) delay(10);
         retryCount++;
     } while (retryCount < MAX_RETRIES);
 
     if (imgLen > 0) {
-        // 解码并显示JPEG预览帧
-        if (jpeg.open((void*)imgAddr, imgLen, nullptr, jpegReadCallback, jpegSeekCallback, JPEGDraw)) {
+        memset(s_previewFrameBuffer, 0, sizeof(s_previewFrameBuffer));
+        s_previewFrameReady = false;
+        
+        if (jpeg.open((void*)imgAddr, imgLen, nullptr, jpegReadCallback, jpegSeekCallback, JPEGDrawForPreview)) {
             jpeg.decode(0, 0, JPEG_SCALE_HALF);
             jpeg.close();
+            
+            if (s_previewFrameReady) {
+                tftManager.drawBitmap(0, 0, PREVIEW_FB_WIDTH, PREVIEW_FB_HEIGHT, s_previewFrameBuffer);
+            }
         }
     }
     
-    // 如果需要绘制录制指示灯，在JPEG显示完成后立即绘制
     if (shouldDrawDot) {
-        // 屏幕右上角位置：屏幕宽度320像素，高度240像素
-        // 使用红色圆形，半径14像素（直径28像素）
         const int dotRadius = 14;
         const int dotX = 320 - 20 - dotRadius;
         const int dotY = 20 + dotRadius;
         
-        // 获取TFT对象直接绘制
         AmebaST7789_DMA_SPI1& tft = tftManager.getTFT();
         
-        // 使用中点圆算法绘制填充圆（高效）
         int x = dotRadius;
         int y = 0;
         int radiusError = 1 - x;
         
         while (x >= y) {
-            // 绘制8个对称点，同时绘制水平线填充
             tft.drawLine(dotX - x, dotY + y, dotX + x, dotY + y, ST7789_RED);
             tft.drawLine(dotX - x, dotY - y, dotX + x, dotY - y, ST7789_RED);
             tft.drawLine(dotX - y, dotY + x, dotX + y, dotY + x, ST7789_RED);
@@ -434,7 +504,6 @@ void processPreviewFrame(void) {
 MJPEGDecoder mjpegDecoder;
 
 // 媒体文件列表相关变量
-#define MAX_MEDIA_FILES 20
 MediaFileInfo mediaFileList[MAX_MEDIA_FILES];
 uint32_t mediaFileCount = 0;
 bool fileListNeedsRedraw = true; // 文件列表重绘标志
@@ -535,9 +604,9 @@ void updateFileList(void) {
                 mediaFileList[mediaFileCount].ftime = fno.ftime;
                 mediaFileCount++;
                 
-                Utils_Logger::info("Found %s file: %s, size: %u bytes", 
-                                  isVideo ? "AVI" : "Image", 
-                                  fno.fname, fno.fsize);
+                // Utils_Logger::info("Found %s file: %s, size: %u bytes", 
+                //                   isVideo ? "AVI" : "Image", 
+                //                   fno.fname, fno.fsize);
             }
         }
     }
@@ -547,7 +616,7 @@ void updateFileList(void) {
     // 按时间递减排序（最新的在前）
     if (mediaFileCount > 1) {
         qsort(mediaFileList, mediaFileCount, sizeof(MediaFileInfo), compareMediaFiles);
-        Utils_Logger::info("Media files sorted by time descending");
+        // Utils_Logger::info("Media files sorted by time descending");
     }
     
     Utils_Logger::info("Found %u media files", mediaFileCount);
@@ -557,13 +626,17 @@ void updateFileList(void) {
 // 进入文件列表模式
 void enterFileListMode(void) {
     if (!sdCardManager.isInitialized()) {
-        Utils_Logger::error("SD card not initialized, cannot enter file list mode");
-        tftManager.fillScreen(ST7789_BLACK);
-        tftManager.setTextSize(1);
-        tftManager.setCursor(10, 10);
-        tftManager.setTextColor(ST7789_RED, ST7789_BLACK);
-        tftManager.print("SD card not inserted");
-        return;
+        // Utils_Logger::info("SD card not initialized, attempting to initialize...");
+        if (!sdCardManager.init()) {
+            Utils_Logger::error("SD card initialization failed, cannot enter file list mode");
+            tftManager.fillScreen(ST7789_BLACK);
+            tftManager.setTextSize(1);
+            tftManager.setCursor(10, 10);
+            tftManager.setTextColor(ST7789_RED, ST7789_BLACK);
+            tftManager.print("SD card not inserted");
+            return;
+        }
+        // Utils_Logger::info("SD card initialized successfully in enterFileListMode");
     }
     
     updateFileList();
@@ -572,9 +645,14 @@ void enterFileListMode(void) {
     currentGroupIndex = 0;
     // 默认选中返回按钮
     isBackButtonSelected = true;
+    // 重置最后选中状态变量，确保每次进入时状态都是干净的
+    lastBackButtonSelected = false;
+    lastSelectedMediaIndex = UINT32_MAX;
+    // 重置当前媒体索引为0
+    currentMediaIndex = 0;
     fileListNeedsRedraw = true; // 设置重绘标志
     
-    Utils_Logger::info("Entered file list mode, %u files available, starting from group 1", mediaFileCount);
+    // Utils_Logger::info("Entered file list mode, %u files available, starting from group 1", mediaFileCount);
 }
 
 // 退出文件列表模式
@@ -582,7 +660,7 @@ void exitFileListMode(void) {
     // 在Camera项目中，通过RTOS事件机制触发返回主菜单
     g_recorderState = REC_MENU;
     TaskManager::setEvent(EVENT_RETURN_TO_MENU);
-    Utils_Logger::info("Exited file list mode and triggered return to menu event");
+    // Utils_Logger::info("Exited file list mode and triggered return to menu event");
 }
 
 // 选择下一个媒体文件（仅用于同一组内导航）
@@ -829,28 +907,30 @@ void imageViewerLoop(void) {
     // 主要通过编码器按钮来退出
 }
 
-// 视频播放循环
+// 视频播放循环（使用帧缓冲区实现高性能回放）
 void videoPlaybackLoop(void) {
     if (g_recorderState != REC_PLAYING || !isPlaying || isPaused) {
         return;
     }
-    
+
     unsigned long currentMillis = millis();
     uint32_t fps = mjpegDecoder.getFPS();
-    uint32_t frameInterval = (fps > 0) ? 1000 / fps : 67; // 默认约15fps
-    
+    uint32_t frameInterval = (fps > 0) ? 1000 / fps : 67;
+
     if (currentMillis - lastFrameTime >= frameInterval) {
         lastFrameTime = currentMillis;
-        
+
         uint8_t* frameData;
         uint32_t frameSize;
-        
+
         if (mjpegDecoder.readNextFrame(&frameData, &frameSize)) {
-            // 解码并显示帧
-            if (jpeg.open((void*)frameData, frameSize, nullptr, jpegReadCallback, jpegSeekCallback, JPEGDraw)) {
-                // 使用1/4缩放，确保宽度不超过240像素
-                jpeg.decode(0, 30, JPEG_SCALE_QUARTER);
+            s_playbackFrameReady = false;
+            if (jpeg.open((void*)frameData, frameSize, nullptr, jpegReadCallback, jpegSeekCallback, JPEGDrawForPlayback)) {
+                jpeg.decode(0, 0, JPEG_SCALE_QUARTER);
                 jpeg.close();
+            }
+            if (s_playbackFrameReady) {
+                tftManager.drawBitmap(0, 30, PLAYBACK_FB_WIDTH, PLAYBACK_FB_HEIGHT, s_playbackFrameBuffer);
             }
         } else {
             // 播放结束
@@ -859,10 +939,10 @@ void videoPlaybackLoop(void) {
     }
 }
 
-// 提取文件名主体部分（排除.avi后缀）
+// 提取文件名主体部分（排除.avi/.jpg后缀）
 void extractFileNameBody(const char* fullName, char* body, size_t bodySize) {
     const char* dotPos = strrchr(fullName, '.');
-    if (dotPos && strcasecmp(dotPos, ".avi") == 0) {
+    if (dotPos && (strcasecmp(dotPos, ".avi") == 0 || strcasecmp(dotPos, ".jpg") == 0)) {
         size_t len = dotPos - fullName;
         if (len < bodySize) {
             strncpy(body, fullName, len);
@@ -926,7 +1006,7 @@ bool resizeThumbnailCache(uint32_t newSize);
 // 缩略图缓存
 ThumbnailCache* thumbnailCache = nullptr;
 uint32_t thumbnailCacheSize = 0;     // 当前缓存大小
-uint32_t thumbnailCacheMaxSize = 10; // 最大缓存大小
+uint32_t thumbnailCacheMaxSize = 0; // 最大缓存大小（0=无限制，由init设置）
 uint32_t thumbnailCacheUsed = 0;     // 已使用的缓存项数
 
 // 初始化缩略图缓存
@@ -1031,80 +1111,98 @@ bool initThumbnailCache(uint32_t size);
 // 调整缩略图缓存大小
 bool resizeThumbnailCache(uint32_t newSize);
 
-// 生成媒体缩略图（支持图片和视频）
+// 生成媒体缩略图（支持图片和视频）- 性能优化版
 bool generateThumbnail(const char* fileName, ThumbnailCache& cache, MediaType mediaType) {
     FIL file;
     FRESULT res = f_open(&file, fileName, FA_READ);
     if (res != FR_OK) {
-        Utils_Logger::error("Failed to open file for thumbnail: %s, error: %d", fileName, res);
+        // Utils_Logger::error("Failed to open file for thumbnail: %s, error: %d", fileName, res);
         return false;
     }
     
     if (mediaType == MEDIA_TYPE_IMAGE) {
-        // 图片文件：直接读取整个文件
+        // 图片文件：优化为只读取部分数据用于缩略图生成
         uint32_t fileSize = f_size(&file);
-        uint8_t* tempBuffer = (uint8_t*)malloc(fileSize);
+        
+        // 限制最大读取大小为 64KB（足够生成缩略图，避免读取大文件）
+        uint32_t readSize = (fileSize > 64 * 1024) ? 64 * 1024 : fileSize;
+        
+        uint8_t* tempBuffer = (uint8_t*)malloc(readSize);
         if (!tempBuffer) {
-            Utils_Logger::error("Failed to allocate memory for image thumbnail");
+            // Utils_Logger::error("Failed to allocate memory for image thumbnail");
             f_close(&file);
             return false;
         }
         
         UINT bytesRead;
-        res = f_read(&file, tempBuffer, fileSize, &bytesRead);
+        res = f_read(&file, tempBuffer, readSize, &bytesRead);
         f_close(&file);
         
-        if (res != FR_OK || bytesRead != fileSize) {
-            Utils_Logger::error("Failed to read image file for thumbnail");
+        if (res != FR_OK || bytesRead == 0) {
+            // Utils_Logger::error("Failed to read image file for thumbnail");
             free(tempBuffer);
             return false;
         }
         
         // 分配缓存并复制数据
-        cache.jpegFrame = (uint8_t*)malloc(fileSize);
+        cache.jpegFrame = (uint8_t*)malloc(bytesRead);
         if (!cache.jpegFrame) {
-            Utils_Logger::error("Failed to allocate memory for JPEG cache");
+            // Utils_Logger::error("Failed to allocate memory for JPEG cache");
             free(tempBuffer);
             return false;
         }
-        memcpy(cache.jpegFrame, tempBuffer, fileSize);
+        memcpy(cache.jpegFrame, tempBuffer, bytesRead);
         free(tempBuffer);
         
-        cache.frameSize = fileSize;
+        cache.frameSize = bytesRead;
         cache.valid = true;
         
         // 解码JPEG获取尺寸信息
-        if (jpeg.open((void*)cache.jpegFrame, fileSize, nullptr, jpegReadCallback, jpegSeekCallback, JPEGDraw)) {
+        if (jpeg.open((void*)cache.jpegFrame, bytesRead, nullptr, jpegReadCallback, jpegSeekCallback, JPEGDraw)) {
             cache.width = jpeg.getWidth();
             cache.height = jpeg.getHeight();
             jpeg.close();
         } else {
-            Utils_Logger::error("Failed to open JPEG decoder for image thumbnail");
+            // 解码失败时标记无效但不报错（可能是截断的 JPEG）
             cache.width = 0;
             cache.height = 0;
         }
         
         return true;
     } else {
-        // 视频文件：查找JPEG帧（适用于MJPEG和AVI文件）
-        uint8_t buffer[8192];
+        // 视频文件：查找JPEG帧 - 使用堆分配避免栈溢出
+        const uint32_t SCAN_BUFFER_SIZE = 8192;  // 8KB 扫描缓冲区（栈安全）
+        uint8_t* buffer = (uint8_t*)malloc(SCAN_BUFFER_SIZE);
+        if (!buffer) {
+            f_close(&file);
+            return false;
+        }
+        
         UINT bytesRead;
         bool foundFrame = false;
         uint32_t frameSize = 0;
         uint32_t totalRead = 0;
+        const uint32_t MAX_SCAN_SIZE = 256 * 1024;  // 最大扫描 256KB
         
         // 逐块读取文件，查找JPEG帧
-        while (f_read(&file, buffer, sizeof(buffer), &bytesRead) == FR_OK && bytesRead > 0) {
+        while (f_read(&file, buffer, SCAN_BUFFER_SIZE, &bytesRead) == FR_OK && bytesRead > 0) {
+            totalRead += bytesRead;
+            
+            // 超过最大扫描大小则停止
+            if (totalRead > MAX_SCAN_SIZE) {
+                break;
+            }
+            
             // 查找JPEG帧头 (0xFF 0xD8)
             for (uint32_t j = 0; j < bytesRead - 1; j++) {
                 if (buffer[j] == 0xFF && buffer[j+1] == 0xD8) {
                     // 找到JPEG帧头，开始处理
                     
-                    // 分配临时缓冲区，用于存储可能跨越边界的JPEG帧
-                    uint32_t maxFrameSize = 2 * 1024 * 1024; // 最大2MB的JPEG帧
+                    // 分配临时缓冲区
+                    uint32_t maxFrameSize = 64 * 1024;  // 最大 64KB 的 JPEG 帧
                     uint8_t* tempFrameBuffer = (uint8_t*)malloc(maxFrameSize);
                     if (!tempFrameBuffer) {
-                        Utils_Logger::error("Failed to allocate memory for temporary JPEG frame buffer");
+                        free(buffer);
                         f_close(&file);
                         return false;
                     }
@@ -1113,6 +1211,7 @@ bool generateThumbnail(const char* fileName, ThumbnailCache& cache, MediaType me
                     uint32_t copiedSize = bytesRead - j;
                     if (copiedSize > maxFrameSize) {
                         free(tempFrameBuffer);
+                        free(buffer);
                         f_close(&file);
                         return false;
                     }
@@ -1122,12 +1221,13 @@ bool generateThumbnail(const char* fileName, ThumbnailCache& cache, MediaType me
                     bool foundEOI = false;
                     UINT nextBytesRead;
                     
-                    while (f_read(&file, buffer, sizeof(buffer), &nextBytesRead) == FR_OK && nextBytesRead > 0) {
+                    while (f_read(&file, buffer, SCAN_BUFFER_SIZE, &nextBytesRead) == FR_OK && nextBytesRead > 0) {
                         totalRead += nextBytesRead;
                         
                         // 检查临时缓冲区是否足够大
                         if (copiedSize + nextBytesRead > maxFrameSize) {
                             free(tempFrameBuffer);
+                            free(buffer);
                             f_close(&file);
                             return false;
                         }
@@ -1155,8 +1255,9 @@ bool generateThumbnail(const char* fileName, ThumbnailCache& cache, MediaType me
                         // 分配内存保存JPEG帧数据
                         cache.jpegFrame = (uint8_t*)malloc(frameSize);
                         if (!cache.jpegFrame) {
-                            Utils_Logger::error("Failed to allocate memory for JPEG frame");
+                            // Utils_Logger::error("Failed to allocate memory for JPEG frame");
                             free(tempFrameBuffer);
+                            free(buffer);
                             f_close(&file);
                             return false;
                         }
@@ -1175,11 +1276,12 @@ bool generateThumbnail(const char* fileName, ThumbnailCache& cache, MediaType me
                             cache.height = jpeg.getHeight();
                             jpeg.close();
                         } else {
-                            Utils_Logger::error("Failed to open JPEG decoder for thumbnail");
+                            // Utils_Logger::error("Failed to open JPEG decoder for thumbnail");
                             cache.width = 0;
                             cache.height = 0;
                         }
                         
+                        free(buffer);
                         f_close(&file);
                         return true;
                     }
@@ -1199,10 +1301,11 @@ bool generateThumbnail(const char* fileName, ThumbnailCache& cache, MediaType me
             }
         }
         
+        free(buffer);
         f_close(&file);
         
         if (!foundFrame) {
-            Utils_Logger::error("No JPEG frame found in file: %s", fileName);
+            // Utils_Logger::error("No JPEG frame found in file: %s", fileName);
             return false;
         }
         
@@ -1276,9 +1379,7 @@ void drawFileListUI(void) {
         
         // 确保缓存大小足够
         if (mediaFileCount > thumbnailCacheSize) {
-            // 自动调整缓存大小为媒体文件数的1.5倍
             uint32_t newSize = mediaFileCount * 1.5;
-            if (newSize > 50) newSize = 50; // 最大缓存大小限制
             resizeThumbnailCache(newSize);
         }
         
@@ -1348,14 +1449,14 @@ void drawFileListUI(void) {
             }
             
             // 显示文件名（截取部分）
-            char fileNameBody[20];
+            char fileNameBody[30];
             extractFileNameBody(mediaFileList[i].fileName, fileNameBody, sizeof(fileNameBody));
-            // 截取文件名，避免过长
-            if (strlen(fileNameBody) > 15) {
-                fileNameBody[12] = '.';
-                fileNameBody[13] = '.';
-                fileNameBody[14] = '.';
-                fileNameBody[15] = '\0';
+            // 截取文件名，避免过长（5x7字体，每字符6px宽，152px宽度可显示约25字符）
+            if (strlen(fileNameBody) > 24) {
+                fileNameBody[21] = '.';
+                fileNameBody[22] = '.';
+                fileNameBody[23] = '.';
+                fileNameBody[24] = '\0';
             }
             tftManager.setCursor(x + 5, y + CELL_HEIGHT - 15);
             tftManager.setTextSize(1);
@@ -1381,6 +1482,20 @@ void drawFileListUI(void) {
             } else {
                 // 未选中的媒体显示白色边框
                 tftManager.drawRectangle(x - 2, y - 2, CELL_WIDTH + 4, CELL_HEIGHT + 4, ST7789_WHITE);
+            }
+        }
+        
+        // 预加载下一组的缩略图（性能优化：提前准备，用户切换时无需等待）
+        uint32_t nextGroupStart = (currentGroupIndex + 1) * MEDIA_PER_GROUP;
+        if (nextGroupStart < mediaFileCount) {
+            uint32_t nextGroupEnd = min(nextGroupStart + MEDIA_PER_GROUP, mediaFileCount);
+            for (uint32_t i = nextGroupStart; i < nextGroupEnd; i++) {
+                if (i < thumbnailCacheSize && !thumbnailCache[i].valid) {
+                    generateThumbnail(mediaFileList[i].fileName, thumbnailCache[i], mediaFileList[i].mediaType);
+                    if (thumbnailCache[i].valid) {
+                        thumbnailCacheUsed++;
+                    }
+                }
             }
         }
         

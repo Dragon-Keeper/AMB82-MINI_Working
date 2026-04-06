@@ -14,7 +14,11 @@ const int32_t ConfigManager::m_defaultValues[CONFIG_MAX] = {
     80,      // CONFIG_CAMERA_QUALITY - Default: 80%
     150,     // CONFIG_DISPLAY_BRIGHTNESS - Default: 150/255
     2,       // CONFIG_ENCODER_SENSITIVITY - Default: 2 steps per click
-    30000    // CONFIG_SYSTEM_TIMEOUT - Default: 30 seconds
+    30000,   // CONFIG_SYSTEM_TIMEOUT - Default: 30 seconds
+    0,       // CONFIG_EXPOSURE_MODE - Default: 0 (自动), 1 (手动)
+    0,       // CONFIG_BRIGHTNESS - Default: 0 (-64 to 64)
+    50,      // CONFIG_CONTRAST - Default: 50 (0 to 100)
+    50       // CONFIG_SATURATION - Default: 50 (0 to 100)
 };
 bool ConfigManager::m_isInitialized = false;
 
@@ -31,13 +35,15 @@ bool ConfigManager::init() {
     
     Utils_Logger::info("Initializing ConfigManager");
     
+    // 先标记为已初始化，这样restoreDefaults才能正常工作
+    m_isInitialized = true;
+    
     // Try to load configuration from flash
     if (!loadFromFlash()) {
         Utils_Logger::info("Failed to load configuration, using defaults");
         restoreDefaults();
     }
     
-    m_isInitialized = true;
     Utils_Logger::info("ConfigManager initialized successfully");
     return true;
 }
@@ -45,7 +51,7 @@ bool ConfigManager::init() {
 // Configuration read/write
 bool ConfigManager::setValue(ConfigID id, int32_t value) {
     if (!m_isInitialized || !isValidConfigID(id)) {
-        Utils_Logger::info("Invalid ConfigID or ConfigManager not initialized");
+        // Utils_Logger::info("Invalid ConfigID or ConfigManager not initialized");
         return false;
     }
     
@@ -53,13 +59,13 @@ bool ConfigManager::setValue(ConfigID id, int32_t value) {
     memcpy(&m_configData.data[id * sizeof(int32_t)], &value, sizeof(int32_t));
     updateLastModified();
     
-    Utils_Logger::info("Set configuration value: %d = %d", id, value);
+    // Utils_Logger::info("Set configuration value: %d = %d", id, value);
     return true;
 }
 
 int32_t ConfigManager::getValue(ConfigID id) {
     if (!m_isInitialized || !isValidConfigID(id)) {
-        Utils_Logger::info("Invalid ConfigID or ConfigManager not initialized");
+        // Utils_Logger::info("Invalid ConfigID or ConfigManager not initialized");
         return 0;
     }
     
@@ -70,7 +76,7 @@ int32_t ConfigManager::getValue(ConfigID id) {
 
 bool ConfigManager::setString(ConfigID id, const char* value) {
     if (!m_isInitialized || !isValidConfigID(id) || value == nullptr) {
-        Utils_Logger::info("Invalid ConfigID, ConfigManager not initialized, or null string");
+        // Utils_Logger::info("Invalid ConfigID, ConfigManager not initialized, or null string");
         return false;
     }
     
@@ -88,13 +94,13 @@ bool ConfigManager::setString(ConfigID id, const char* value) {
     
     updateLastModified();
     
-    Utils_Logger::info("Set configuration string: %d = %s", id, value);
+    // Utils_Logger::info("Set configuration string: %d = %s", id, value);
     return true;
 }
 
 const char* ConfigManager::getString(ConfigID id, char* buffer, uint32_t size) {
     if (!m_isInitialized || !isValidConfigID(id) || buffer == nullptr || size == 0) {
-        Utils_Logger::info("Invalid parameters or ConfigManager not initialized");
+        // Utils_Logger::info("Invalid parameters or ConfigManager not initialized");
         return nullptr;
     }
     
@@ -112,7 +118,7 @@ const char* ConfigManager::getString(ConfigID id, char* buffer, uint32_t size) {
     
     // Copy string data to buffer
     if (length + 1 > size) {
-        Utils_Logger::info("Buffer size too small for string");
+        // Utils_Logger::info("Buffer size too small for string");
         return nullptr;
     }
     
@@ -125,7 +131,7 @@ const char* ConfigManager::getString(ConfigID id, char* buffer, uint32_t size) {
 // Configuration persistence
 bool ConfigManager::saveToFlash() {
     if (!m_isInitialized) {
-        Utils_Logger::info("ConfigManager not initialized");
+        // Utils_Logger::info("ConfigManager not initialized");
         return false;
     }
     
@@ -134,10 +140,10 @@ bool ConfigManager::saveToFlash() {
     
     // In a real implementation, this would write to flash memory
     // For this example, we'll simulate writing to flash
-    Utils_Logger::info("Saving configuration to flash (simulated)");
-    Utils_Logger::info("Configuration version: %d", m_configData.version);
-    Utils_Logger::info("Configuration checksum: %d", m_configData.checksum);
-    Utils_Logger::info("Last modified: %d", m_configData.lastModified);
+    // Utils_Logger::info("Saving configuration to flash (simulated)");
+    // Utils_Logger::info("Configuration version: %d", m_configData.version);
+    // Utils_Logger::info("Configuration checksum: %d", m_configData.checksum);
+    // Utils_Logger::info("Last modified: %d", m_configData.lastModified);
     
     return true;
 }
@@ -145,31 +151,31 @@ bool ConfigManager::saveToFlash() {
 bool ConfigManager::loadFromFlash() {
     // In a real implementation, this would read from flash memory
     // For this example, we'll simulate reading from flash
-    Utils_Logger::info("Loading configuration from flash (simulated)");
+    // Utils_Logger::info("Loading configuration from flash (simulated)");
     
     // Simulate successful load
     if (m_configData.version == 0) {
-        Utils_Logger::info("No valid configuration found in flash");
+        // Utils_Logger::info("No valid configuration found in flash");
         return false;
     }
     
     // Validate configuration
     if (!validateConfig()) {
-        Utils_Logger::info("Invalid configuration found in flash");
+        // Utils_Logger::info("Invalid configuration found in flash");
         return false;
     }
     
-    Utils_Logger::info("Configuration loaded successfully");
+    // Utils_Logger::info("Configuration loaded successfully");
     return true;
 }
 
 bool ConfigManager::restoreDefaults() {
     if (!m_isInitialized) {
-        Utils_Logger::info("ConfigManager not initialized");
+        // Utils_Logger::info("ConfigManager not initialized");
         return false;
     }
     
-    Utils_Logger::info("Restoring default configuration");
+    // Utils_Logger::info("Restoring default configuration");
     
     // Reset configuration data
     m_configData.version = 1;
@@ -196,7 +202,7 @@ bool ConfigManager::validateConfig() {
     
     uint32_t calculatedChecksum = calculateChecksum();
     if (m_configData.checksum != calculatedChecksum) {
-        Utils_Logger::info("Configuration checksum mismatch: expected %d, got %d", m_configData.checksum, calculatedChecksum);
+        // Utils_Logger::info("Configuration checksum mismatch: expected %d, got %d", m_configData.checksum, calculatedChecksum);
         return false;
     }
     

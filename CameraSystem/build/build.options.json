@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "",
+  "fqbn": "realtek:AmebaPro2:Ameba_AMB82-MINI",
+  "hardwareFolders": "C:\\Users\\Debug\\AppData\\Local\\Arduino15\\packages\\realtek\\hardware\\AmebaPro2\\4.0.9-build20250528,C:\\Users\\Debug\\AppData\\Local\\Arduino15\\packages\\realtek\\hardware\\AmebaPro2\\4.0.9-build20250528",
+  "otherLibrariesFolders": "C:\\Users\\Debug\\Documents\\Arduino\\libraries",
+  "sketchLocation": "C:\\Users\\Debug\\AppData\\Local\\Arduino15\\packages\\realtek\\hardware\\AmebaPro2\\4.0.9-build20250528\\libraries\\CameraSystem\\examples\\Camera"
+}

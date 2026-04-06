@@ -12,10 +12,15 @@
 uint16_t AmebaST7789_DMA_SPI1::dmaBuf[2][DMA_BUF_SIZE] = {0};
 uint8_t  AmebaST7789_DMA_SPI1::bufIdx = 0;
 
-/* 底层 DMA 发送 RGB565 块 */
+/* 底层 DMA 发送 RGB565 块 - 完全同步版本 */
 inline void AmebaST7789_DMA_SPI1::startDMAtransfer(uint16_t *pixels, uint32_t pixels_cnt) {
     digitalWrite(_dcPin, HIGH);                       // 数据模式
     SPI1.transfer((uint8_t *)pixels, pixels_cnt * 2, SPI_LAST); // DMA 传输
+    
+    // 使用足够长的固定等待时间，确保任何大小的数据都能传输完成
+    // SPI频率40MHz，最大数据量320*240*2=153600字节，需要约3.84ms
+    // 使用5ms可以覆盖所有情况，包括系统开销
+    delayMicroseconds(5000);
 }
 
 /* 重写 drawBitmap → DMA 整块送出 */
@@ -27,19 +32,19 @@ void AmebaST7789_DMA_SPI1::drawBitmap(int16_t x, int16_t y, int16_t w, int16_t h
     
     setAddress(x, y, x + w - 1, y + h - 1);
 
-    /* 拷贝数据到DMA缓冲区 - 转换为ST7789格式（高字节在前）*/
-    uint16_t *dst = dmaBuf[bufIdx];
+    /* 拷贝数据到DMA缓冲区，并转换字节顺序 */
+    /* JPEGDEC库输出小端RGB565，ST7789需要大端RGB565 */
+    uint16_t *dst = dmaBuf[0];
     const uint16_t *src = (const uint16_t *)color;
-    uint32_t pixel_count = w * h;
+    uint32_t pixel_count = (uint32_t)w * h;
     
     // 转换字节顺序：从RGB565小端格式转换为ST7789大端格式
     for (uint32_t i = 0; i < pixel_count; i++) {
         uint16_t pixel = src[i];
-        dst[i] = ((pixel & 0xFF) << 8) | (pixel >> 8);  // 交换字节
+        dst[i] = ((pixel & 0xFF) << 8) | (pixel >> 8);  // 交换高低字节
     }
     
     startDMAtransfer(dst, pixel_count);
-    bufIdx = (bufIdx + 1) % 2; // 切换缓冲区
 }
 
 /* 纯色矩形：单颜色→整块 DMA */
@@ -50,21 +55,19 @@ void AmebaST7789_DMA_SPI1::fillRectangle(int16_t x, int16_t y, int16_t w, int16_
 
     setAddress(x, y, x + w - 1, y + h - 1);
 
-    uint16_t *dst = dmaBuf[bufIdx];
-    // 交换颜色值的字节顺序
-    uint16_t swapped_color = ((color & 0xFF) << 8) | (color >> 8);
+    /* 始终使用缓冲区0 */
+    uint16_t *dst = dmaBuf[0];
     uint32_t pixel_count = (uint32_t)w * h;
-    for (uint32_t i = 0; i < pixel_count; ++i) dst[i] = swapped_color;
+    for (uint32_t i = 0; i < pixel_count; ++i) dst[i] = color;
     
     startDMAtransfer(dst, pixel_count);
-    bufIdx = (bufIdx + 1) % 2; // 切换缓冲区
 }
 
-/* 单点像素：仍走 DMA（开销可忽略） */
+/* 单点像素：仍走 DMA（开销可忽略）*/
 void AmebaST7789_DMA_SPI1::drawPixel(int16_t x, int16_t y, uint16_t color) {
     if (x < 0 || x >= _width || y < 0 || y >= _height) return;
     setAddress(x, y, x, y);
-    dmaBuf[bufIdx][0] = ((color & 0xFF) << 8) | (color >> 8);  // 交换字节顺序
-    startDMAtransfer(dmaBuf[bufIdx], 1);
-    bufIdx = (bufIdx + 1) % 2; // 切换缓冲区
+    
+    dmaBuf[0][0] = color;
+    startDMAtransfer(dmaBuf[0], 1);
 }

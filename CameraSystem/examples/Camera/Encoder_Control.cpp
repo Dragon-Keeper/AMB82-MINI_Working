@@ -20,8 +20,9 @@ EncoderControl::EncoderControl() :
     m_lastButtonTime(0),
     m_buttonPressDetected(false),
     m_debounceDelay(BUTTON_DEBOUNCE_DELAY),
-    m_rotationDebounceDelay(400), // 新增：设置旋转防抖延迟为400ms（与Camera_SON项目一致）
-    m_lastRotationTime(0),        // 新增：初始化上次旋转时间
+    m_lastInterruptTime(0),
+    m_lastValidRotationTime(0),
+    m_rotationDebounceUs(300000),
     m_rotationCallback(nullptr),
     m_buttonCallback(nullptr)
 {
@@ -84,9 +85,9 @@ void EncoderControl::setDebounceTime(unsigned long ms)
     m_debounceDelay = ms;
 }
 
-void EncoderControl::setRotationDebounceTime(unsigned long ms)
+void EncoderControl::setRotationDebounceTime(unsigned long us)
 {
-    m_rotationDebounceDelay = ms;
+    m_rotationDebounceUs = us;
 }
 
 void EncoderControl::checkButton()
@@ -146,55 +147,42 @@ void EncoderControl::encoderRotation_handler(uint32_t id, uint32_t event)
 
 void EncoderControl::handleRotation()
 {
-    // 读取DT引脚状态
-    bool dtState = digitalRead(m_dtPin);
+    unsigned long currentTime = micros();
     
-    // 检测旋转方向（在下降沿时检测DT引脚状态）
-    if (dtState == HIGH) {
-        // 顺时针旋转：向下移动三角形
-        m_rotationDirection = ROTATION_CW;
-        m_rotationDetected = true;
-    } else if (dtState == LOW) {
-        // 逆时针旋转：向上移动三角形
-        m_rotationDirection = ROTATION_CCW;
-        m_rotationDetected = true;
+    if (currentTime - m_lastInterruptTime < 100000) {
+        return;
     }
     
-    // 中断中只设置标志，不直接调用回调函数
-    // 回调函数将在主循环的checkRotation()方法中调用
+    m_lastInterruptTime = currentTime;
     
-    Utils_Logger::debug("编码器旋转检测: 方向=%d, 检测=%s", 
-                       m_rotationDirection, 
-                       m_rotationDetected ? "true" : "false");
+    bool dtState = digitalRead(m_dtPin);
+    
+    if (dtState == HIGH) {
+        m_rotationDirection = ROTATION_CW;
+    } else {
+        m_rotationDirection = ROTATION_CCW;
+    }
+    
+    m_rotationDetected = true;
 }
 
-// 检查旋转事件并调用回调函数（需要在主循环中调用）
 void EncoderControl::checkRotation()
 {
     if (m_rotationDetected && m_rotationCallback != nullptr) {
-        // 获取当前时间进行旋转防抖处理
-        unsigned long currentTime = Utils_Timer::getCurrentTime();
+        unsigned long currentTime = micros();
         
-        // 旋转事件防抖处理（防止重复事件导致的导航问题）
-        if (currentTime - m_lastRotationTime >= m_rotationDebounceDelay) {
-            // 更新上次旋转时间
-            m_lastRotationTime = currentTime;
-            
-            // 调用旋转回调函数
+        if (currentTime - m_lastValidRotationTime >= m_rotationDebounceUs) {
+            m_lastValidRotationTime = currentTime;
             m_rotationCallback(m_rotationDirection);
-            
-            Utils_Logger::info("编码器旋转事件已处理: 方向=%d, 防抖延迟=%dms", 
-                             m_rotationDirection, 
-                             m_rotationDebounceDelay);
+            Utils_Logger::info("编码器旋转事件已处理: 方向=%d, 防抖延迟=%dus",
+                             m_rotationDirection, m_rotationDebounceUs);
+            m_rotationDetected = false;
+            m_rotationDirection = ROTATION_NONE;
         } else {
-            Utils_Logger::debug("编码器旋转事件被防抖忽略: 时间间隔=%dms, 阈值=%dms", 
-                              currentTime - m_lastRotationTime, 
-                              m_rotationDebounceDelay);
+            Utils_Logger::info("忽略快速旋转事件（严格消抖处理）");
+            m_rotationDetected = false;
+            m_rotationDirection = ROTATION_NONE;
         }
-        
-        // 重置旋转检测标志（无论是否防抖都重置，避免事件堆积）
-        m_rotationDetected = false;
-        m_rotationDirection = ROTATION_NONE;
     }
 }
 

@@ -27,9 +27,9 @@ static const MenuItem mainMenuItems[] = {
         .dataIndex = 2
     },
     {
-        .label = "",
-        .type = MENU_ITEM_TYPE_NONE,
-        .operation = MENU_OPERATION_NONE,
+        .label = "参数设置",
+        .type = MENU_ITEM_TYPE_PARAM_SETTINGS,
+        .operation = MENU_OPERATION_PARAM_SETTINGS,
         .dataIndex = 3
     },
     {
@@ -62,8 +62,8 @@ static const MenuItem subMenuItems[] = {
     },
     {
         .label = "系统设置",
-        .type = MENU_ITEM_TYPE_SETTING,
-        .operation = MENU_OPERATION_SETTINGS,
+        .type = MENU_ITEM_TYPE_PARAM_SETTINGS,
+        .operation = MENU_OPERATION_PARAM_SETTINGS,
         .dataIndex = 2
     },
     {
@@ -86,6 +86,46 @@ static const MenuItem subMenuItems[] = {
     }
 };
 
+// 参数设置菜单项定义
+static const MenuItem paramSettingsItems[] = {
+    {
+        .label = "曝光模式",
+        .type = MENU_ITEM_TYPE_EXPOSURE_MODE,
+        .operation = MENU_OPERATION_EXPOSURE_MODE,
+        .dataIndex = 0
+    },
+    {
+        .label = "亮度",
+        .type = MENU_ITEM_TYPE_SLIDER,
+        .operation = MENU_OPERATION_BRIGHTNESS,
+        .dataIndex = 1
+    },
+    {
+        .label = "对比度",
+        .type = MENU_ITEM_TYPE_SLIDER,
+        .operation = MENU_OPERATION_CONTRAST,
+        .dataIndex = 2
+    },
+    {
+        .label = "饱和度",
+        .type = MENU_ITEM_TYPE_SLIDER,
+        .operation = MENU_OPERATION_SATURATION,
+        .dataIndex = 3
+    },
+    {
+        .label = "重置默认参数",
+        .type = MENU_ITEM_TYPE_FUNCTION,
+        .operation = MENU_OPERATION_RESET_DEFAULTS,
+        .dataIndex = 4
+    },
+    {
+        .label = "返回主菜单",
+        .type = MENU_ITEM_TYPE_FUNCTION,
+        .operation = MENU_OPERATION_BACK,
+        .dataIndex = 5
+    }
+};
+
 // 主菜单配置
 const MenuConfig mainMenuConfig = {
     .menuItemCount = sizeof(mainMenuItems) / sizeof(MenuItem),
@@ -96,4 +136,10 @@ const MenuConfig mainMenuConfig = {
 const MenuConfig subMenuConfig = {
     .menuItemCount = sizeof(subMenuItems) / sizeof(MenuItem),
     .menuItems = subMenuItems
+};
+
+// 参数设置菜单配置
+const MenuConfig paramSettingsConfig = {
+    .menuItemCount = sizeof(paramSettingsItems) / sizeof(MenuItem),
+    .menuItems = paramSettingsItems
 };

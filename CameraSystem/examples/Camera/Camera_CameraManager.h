@@ -15,6 +15,14 @@
 #include "Utils_Timer.h"
 #include <JPEGDEC.h>
 #include "Camera_SDCardManager.h"
+#include "ISP_ConfigManager.h"
+
+// ISP 参数默认值定义
+#define ISP_DEFAULT_EXPOSURE_MODE 1       // 1: 自动曝光
+#define ISP_DEFAULT_BRIGHTNESS 0          // 0: 默认亮度 (-64~64)
+#define ISP_DEFAULT_CONTRAST 50           // 50: 默认对比度 (0~100)
+#define ISP_DEFAULT_SATURATION 50         // 50: 默认饱和度 (0~100)
+#define ISP_DEFAULT_AWB_MODE 1             // 1: 自动白平衡
 
 class CameraManager {
 public:
@@ -44,6 +52,10 @@ public:
     void stopPreview();
     void processPreviewFrame();
 
+    // 设置预览显示模式（全屏或左侧2/3）
+    // fullWidth: true=全屏显示(240x240), false=左侧2/3显示(195x240，用于参数设置面板)
+    void setPreviewDisplayMode(bool fullWidth);
+
     bool capturePhoto();
     bool savePhotoToSDCard(uint32_t imgAddr, uint32_t imgLen);
 
@@ -60,6 +72,27 @@ public:
     SDCardManager& getSDCardManager();
     bool isInitialized() const; // 新增方法：检查相机管理器是否已初始化
 
+    // ISP 配置方法 - 阶段一基础集成
+    void initISP();
+    void setExposureMode(int mode);
+    int getExposureMode() const;
+    void setBrightness(int value);
+    int getBrightness() const;
+    void setContrast(int value);
+    int getContrast() const;
+    void setSaturation(int value);
+    int getSaturation() const;
+    void setAWBMode(int mode);
+    int getAWBMode() const;
+    void resetISP();
+    void applyISPSettings();
+
+    // VOE 状态管理
+    bool isVOEReady() const;
+    void setVOEReady(bool ready);
+
+private:
+
 private:
     Display_TFTManager* m_tftManager;
     Display_FontRenderer* m_fontRenderer;
@@ -75,6 +108,19 @@ private:
     ImageBuffer m_stillBuffer;
 
     bool m_initialized;
+
+    // ISP 配置成员变量 - 阶段一基础集成
+    CameraSetting* m_ispConfig;
+    int m_currentExposureMode;
+    int m_currentBrightness;
+    int m_currentContrast;
+    int m_currentSaturation;
+    int m_currentAWBMode;
+    bool m_ispInitialized;
+    bool m_voeReady;
+
+    // ISP 配置管理器 - 阶段三集成
+    ISPConfigManager* m_ispConfigManager;
 };
 
 #endif

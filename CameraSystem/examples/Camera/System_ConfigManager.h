@@ -18,6 +18,10 @@ public:
         CONFIG_DISPLAY_BRIGHTNESS = 2,
         CONFIG_ENCODER_SENSITIVITY = 3,
         CONFIG_SYSTEM_TIMEOUT = 4,
+        CONFIG_EXPOSURE_MODE = 5,
+        CONFIG_BRIGHTNESS = 6,
+        CONFIG_CONTRAST = 7,
+        CONFIG_SATURATION = 8,
         CONFIG_MAX
     } ConfigID;
     
@@ -49,6 +53,7 @@ public:
     // Configuration information
     static uint32_t getConfigVersion();
     static uint32_t getLastModified();
+    static bool isInitialized() { return m_isInitialized; }
     
     // Cleanup
     static void cleanup();

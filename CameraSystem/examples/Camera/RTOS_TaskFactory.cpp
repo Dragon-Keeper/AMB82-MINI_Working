@@ -14,6 +14,11 @@
 #include "Inmp441_MicrophoneManager.h"
 #include "VideoRecorder.h"
 #include "MJPEG_Encoder.h"
+#include "ISP_ConfigTask.h"
+#include "ISP_ConfigManager.h"
+#include "ISP_ConfigUI.h"
+#include "Menu_ParamSettings.h"
+#include "System_ConfigManager.h"
 
 // 外部全局对象声明
 extern Display_TFTManager tftManager;
@@ -42,14 +47,14 @@ bool jpegDrawCallback(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bi
 // 拍照功能：编码器旋转处理函数
 void capturePhotoHandleEncoderRotation(RotationDirection direction) {
     // 拍照功能中旋转编码器用于返回主菜单
-    Utils_Logger::info("拍照模式：检测到编码器旋转，返回主菜单");
+    // Utils_Logger::info("拍照模式：检测到编码器旋转，返回主菜单");
     TaskManager::setEvent(EVENT_RETURN_TO_MENU);
 }
 
 // 拍照功能：编码器按钮处理函数
 void capturePhotoHandleEncoderButton() {
     // 拍照功能中按钮按下用于拍照
-    Utils_Logger::info("拍照模式：按钮按下，开始拍照");
+    // Utils_Logger::info("拍照模式：按钮按下，开始拍照");
     if (!cameraManager.isCapturing()) {
         cameraManager.requestCapture();
     }
@@ -63,7 +68,7 @@ void taskCameraPreview(void* pvParameters) {
     TaskFactory::TaskParams* params = static_cast<TaskFactory::TaskParams*>(pvParameters);
     uint32_t taskId = (params != NULL) ? params->param1 : 0;
     
-    Utils_Logger::info("相机预览任务 %c 启动", (char)('A' + taskId));
+    // Utils_Logger::info("相机预览任务 %c 启动", (char)('A' + taskId));
     
     // 设置系统状态为相机预览模式
     StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
@@ -90,7 +95,10 @@ void taskCameraPreview(void* pvParameters) {
     
     cameraManager.startPreview();
     
-    Utils_Logger::info("拍照功能初始化完成，等待用户操作");
+    // 选项A（拍照片）：设置预览为全屏显示
+    cameraManager.setPreviewDisplayMode(true);
+    
+    // Utils_Logger::info("拍照功能初始化完成，等待用户操作");
     
     // 任务主循环
     while (1) {
@@ -100,7 +108,7 @@ void taskCameraPreview(void* pvParameters) {
         // 检查是否有拍照请求
         if (cameraManager.hasCaptureRequest() && !cameraManager.isCapturing()) {
             // 只在空闲时处理拍照请求，减少对预览的影响
-            Utils_Logger::info("Capture request detected, starting capture...");
+            // Utils_Logger::info("Capture request detected, starting capture...");
             cameraManager.clearCaptureRequest();
             cameraManager.capturePhoto();
         }
@@ -113,7 +121,7 @@ void taskCameraPreview(void* pvParameters) {
         );
         
         if ((uxBits & EVENT_RETURN_TO_MENU) != 0) {
-            Utils_Logger::info("相机预览任务 %c 收到退出信号", (char)('A' + taskId));
+            // Utils_Logger::info("相机预览任务 %c 收到退出信号", (char)('A' + taskId));
             break;
         }
         
@@ -133,7 +141,8 @@ void taskCameraPreview(void* pvParameters) {
     extern void handleEncoderButton();
     encoder.setRotationCallback(handleEncoderRotation);
     encoder.setButtonCallback(handleEncoderButton);
-    Utils_Logger::info("已重置编码器回调函数为主菜单回调");
+    encoder.setRotationDebounceTime(300000);
+    // Utils_Logger::info("已重置编码器回调函数为主菜单回调");
     
     // 切换回主菜单并强制重绘整个界面
     menuContext.switchToMainMenu();
@@ -406,55 +415,112 @@ void taskFunctionC(void* pvParameters) {
 }
 
 /**
- * 功能模块D任务 (位置D)
+ * 功能模块D任务 (位置D) - ISP配置功能
  */
-void taskFunctionD(void* pvParameters) {
-    // 解析任务参数
-    TaskFactory::TaskParams* params = static_cast<TaskFactory::TaskParams*>(pvParameters);
-    uint32_t taskId = (params != NULL) ? params->param1 : 3;
+extern void taskISPConfig(void* pvParameters);
+
+static ParamSettingsMenu* g_paramSettingsMenu = nullptr;
+
+static void handleParamSettingsRotation(RotationDirection direction) {
+    if (g_paramSettingsMenu) {
+        g_paramSettingsMenu->handleEncoderRotation(direction);
+    }
+}
+
+static void handleParamSettingsButton() {
+    if (g_paramSettingsMenu) {
+        g_paramSettingsMenu->handleEncoderButton();
+    }
+}
+
+void taskParamSettings(void* pvParameters) {
+    Utils_Logger::info("参数设置任务启动");
     
-    Utils_Logger::info("功能模块D任务 %c 启动", (char)('A' + taskId));
+    StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
     
-    // 任务主循环
+    extern Display_TFTManager tftManager;
+    extern Display_FontRenderer fontRenderer;
+    extern JPEGDEC jpeg;
+    extern CameraManager cameraManager;
+    extern EncoderControl encoder;
+    extern MenuContext menuContext;
+    
+    if (!cameraManager.isInitialized()) {
+        Utils_Logger::info("相机管理器未初始化，正在重新初始化...");
+        if (!cameraManager.init(tftManager, fontRenderer, jpeg)) {
+            Utils_Logger::error("相机管理器重新初始化失败");
+            vTaskDelete(NULL);
+            return;
+        }
+    }
+    
+    ParamSettingsMenu paramSettingsMenu(tftManager, fontRenderer);
+    g_paramSettingsMenu = &paramSettingsMenu;
+    paramSettingsMenu.setCameraManager(&cameraManager);
+    
+    if (!ConfigManager::init()) {
+        Utils_Logger::error("ConfigManager init failed");
+    }
+    
+    encoder.setRotationCallback(handleParamSettingsRotation);
+    encoder.setButtonCallback(handleParamSettingsButton);
+    encoder.setRotationDebounceTime(300000);
+    
+    cameraManager.startPreview();
+    
+    // 选项D（参数设置）：设置预览为左侧2/3显示（右侧显示参数面板）
+    cameraManager.setPreviewDisplayMode(false);
+    paramSettingsMenu.show();
+    
+    Utils_Logger::info("参数设置功能初始化完成，等待用户操作");
+    
     while (1) {
-        // 检查是否需要退出任务
+        cameraManager.processPreviewFrame();
+        
+        paramSettingsMenu.update();
+        
         uint32_t uxBits = TaskManager::waitForEvent(
             EVENT_RETURN_TO_MENU,
-            true,
-            100 / portTICK_PERIOD_MS
+            false,
+            10 / portTICK_PERIOD_MS
         );
         
         if ((uxBits & EVENT_RETURN_TO_MENU) != 0) {
+            Utils_Logger::info("参数设置任务收到退出信号");
             break;
         }
         
-        // 任务功能实现
-        // TODO: 实现功能模块D的具体逻辑
-        
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+        encoder.checkRotation();
+        encoder.checkButton();
     }
     
-    // 首先清除退出事件标志，防止残留影响新任务
+    cameraManager.stopPreview();
+    g_paramSettingsMenu = nullptr;
+    
     TaskManager::clearEvent(EVENT_RETURN_TO_MENU);
     
-    // 更新系统状态返回到主菜单
+    extern void handleEncoderRotation(RotationDirection direction);
+    extern void handleEncoderButton();
+    encoder.setRotationCallback(handleEncoderRotation);
+    encoder.setButtonCallback(handleEncoderButton);
+    Utils_Logger::info("已重置编码器回调函数为主菜单回调");
+    
+    menuContext.switchToMainMenu();
+    menuContext.showMenu();
+    
     StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
     
-    // 清除所有事件标志，确保系统状态干净
     TaskManager::clearEvent(EVENT_ALL_TASKS_CLEAR);
     
-    // 更新任务状态信息
     TaskManager::markTaskAsDeleting(TaskManager::TASK_FUNCTION_D);
     
-    Utils_Logger::info("功能模块D任务 %c 退出", (char)('A' + taskId));
+    Utils_Logger::info("参数设置任务退出");
     
-    // 清理任务参数
-    if (params != NULL) {
-        delete params;
-    }
-    
-    // 删除任务
     vTaskDelete(NULL);
+}
+
+void taskFunctionD(void* pvParameters) {
+    taskParamSettings(pvParameters);
 }
 
 /**

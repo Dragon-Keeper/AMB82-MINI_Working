@@ -7,6 +7,9 @@
 #include "Display_TFTManager.h"
 #include "Utils_Logger.h"
 
+// 全局TFT管理器实例定义
+Display_TFTManager tftManager;
+
 Display_TFTManager::Display_TFTManager() 
     : m_tft(TFT_CS, TFT_DC, TFT_RST), m_initialized(false) {
 }

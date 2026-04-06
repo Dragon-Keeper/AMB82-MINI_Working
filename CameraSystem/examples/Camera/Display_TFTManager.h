@@ -20,6 +20,20 @@
 #define ST7789_MAGENTA     0xF81F
 #define ST7789_YELLOW      0xFFE0
 #define ST7789_WHITE       0xFFFF
+#define ST7789_GREY        0x8410
+#define ST7789_DARKGREY    0x4208
+
+#define UI_BG              ST7789_BLACK
+#define UI_PRIMARY         ST7789_BLACK
+#define UI_SECONDARY       ST7789_BLACK
+#define UI_ACCENT          0x05FF
+#define UI_TRACK           0x2104
+#define UI_FILL            ST7789_WHITE
+#define UI_TEXT_SELECTED   ST7789_WHITE
+#define UI_TEXT_UNSELECTED ST7789_WHITE
+#define UI_DIVIDER         ST7789_WHITE
+#define UI_GLOW_TOP        0x18E3
+#define UI_GLOW_BOTTOM     0x0861
 
 class Display_TFTManager {
 public:

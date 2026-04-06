@@ -6,6 +6,7 @@
 
 #include "Menu_MenuContext.h"
 #include "Camera_CameraManager.h"
+#include "Menu_ParamSettings.h"
 
 // 前向声明全局菜单上下文对象
 extern MenuContext menuContext;
@@ -122,6 +123,10 @@ bool MenuContext::init() {
         return false;
     }
     
+    // 初始化参数设置菜单
+    paramSettingsMenu = new ParamSettingsMenu(tftManager, fontRenderer);
+    paramSettingsMenu->init();
+    
     // 显示初始菜单
     showMenu();
     
@@ -138,6 +143,44 @@ bool MenuContext::handleEvent(MenuEventType event) {
     }
     
     Utils_Logger::info("[MenuContext] 处理事件: %d", event);
+    
+    // 如果在参数设置菜单中，直接委托给参数设置菜单处理
+    if (inParamSettings && paramSettingsMenu != nullptr) {
+        switch (event) {
+            case MENU_EVENT_UP:
+                paramSettingsMenu->handleUp();
+                break;
+            case MENU_EVENT_DOWN:
+                paramSettingsMenu->handleDown();
+                break;
+            case MENU_EVENT_SELECT:
+                paramSettingsMenu->handleSelect();
+                // 检查是否需要退出参数设置菜单
+                if (paramSettingsMenu->getState() == PARAM_STATE_MENU && 
+                    paramSettingsMenu->getCurrentMenuItem() == 5) {
+                    inParamSettings = false;
+                    paramSettingsMenu->reset();
+                    menuManager.switchToPageByType(MENU_PAGE_SUB);
+                    triangleController.resetPosition();
+                    showMenu();
+                }
+                break;
+            case MENU_EVENT_BACK:
+                paramSettingsMenu->handleBack();
+                // 检查是否需要退出参数设置菜单
+                if (paramSettingsMenu->getState() == PARAM_STATE_MENU) {
+                    inParamSettings = false;
+                    paramSettingsMenu->reset();
+                    menuManager.switchToPageByType(MENU_PAGE_SUB);
+                    triangleController.resetPosition();
+                    showMenu();
+                }
+                break;
+            default:
+                break;
+        }
+        return true;
+    }
     
     switch (event) {
         case MENU_EVENT_UP:
@@ -180,6 +223,13 @@ bool MenuContext::handleEvent(MenuEventType event) {
                                 menuManager.switchToPageByType(MENU_PAGE_SUB);
                                 triangleController.resetPosition();
                             }
+                            break;
+                            
+                        case MENU_OPERATION_PARAM_SETTINGS:
+                            Utils_Logger::info("[MenuContext] 进入参数设置菜单");
+                            inParamSettings = true;
+                            paramSettingsMenu->init();
+                            paramSettingsMenu->show();
                             break;
                             
                         case MENU_OPERATION_ABOUT:
@@ -251,6 +301,12 @@ void MenuContext::showMenu() {
         return;
     }
     
+    // 如果在参数设置菜单中，不显示常规菜单
+    if (inParamSettings && paramSettingsMenu != nullptr) {
+        Utils_Logger::info("[MenuContext] 参数设置菜单模式，不显示常规菜单");
+        return;
+    }
+    
     // 显示当前菜单页面
     menuManager.showCurrentMenu();
     
@@ -285,6 +341,12 @@ void MenuContext::reset() {
     }
     
     Utils_Logger::info("[MenuContext] 重置菜单状态");
+    
+    // 重置参数设置菜单状态
+    inParamSettings = false;
+    if (paramSettingsMenu != nullptr) {
+        paramSettingsMenu->reset();
+    }
     
     // 切换到主菜单
     menuManager.switchToPageByType(MENU_PAGE_MAIN);
@@ -352,6 +414,9 @@ void MenuContext::switchToMainMenu() {
     Utils_Logger::info("切换回主菜单");
     StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
     
+    // 清除参数设置菜单标志
+    inParamSettings = false;
+    
     // 清除可能残留的按钮按下标志，防止错误触发任务创建
     StateManager::getInstance().setButtonPressDetected(false);
     
@@ -371,6 +436,12 @@ void MenuContext::cleanup() {
     
     // 重置菜单状态
     reset();
+    
+    // 清理参数设置菜单对象
+    if (paramSettingsMenu != nullptr) {
+        delete paramSettingsMenu;
+        paramSettingsMenu = nullptr;
+    }
     
     // 清理菜单管理器资源
     menuManager.cleanup();

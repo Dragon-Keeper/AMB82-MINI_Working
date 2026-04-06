@@ -11,8 +11,8 @@
 // 系统版本号定义
 // ===============================================
 #define SYSTEM_VERSION_MAJOR 1
-#define SYSTEM_VERSION_MINOR 28
-#define SYSTEM_VERSION_STRING "V1.28"
+#define SYSTEM_VERSION_MINOR 33
+#define SYSTEM_VERSION_STRING "V1.33"
 
 // ===============================================
 // 音频录制配置
