@@ -54,8 +54,10 @@ public:
     // 清理资源
     void cleanup();
     
-    // 中断处理函数（静态成员函数）
+    void clearPendingEvents();
+    
     static void encoderRotation_handler(uint32_t id, uint32_t event);
+    static void encoderButton_handler(uint32_t id, uint32_t event);
     
 private:
     // 引脚配置
@@ -71,13 +73,17 @@ private:
     // 按钮状态变量
     bool m_lastButtonState;
     unsigned long m_lastButtonTime;
-    bool m_buttonPressDetected;
+    volatile bool m_buttonPressDetected;
+    volatile unsigned long m_lastButtonInterruptTime;
+    volatile bool m_buttonEverReleased;
+    
+    unsigned long m_initCompleteTime;
     
     // 消抖参数
     unsigned long m_debounceDelay;
-    unsigned long m_lastInterruptTime;       // 上次中断时间（用于中断层100ms消抖）
-    unsigned long m_lastValidRotationTime;   // 上次有效旋转时间（用于主循环层消抖）
-    unsigned long m_rotationDebounceUs;      // 主循环层旋转防抖时间（微秒）
+    unsigned long m_lastInterruptTime;
+    unsigned long m_lastValidRotationTime;
+    unsigned long m_rotationDebounceUs;
     
     // 事件回调函数
     RotationCallback m_rotationCallback;
@@ -88,6 +94,7 @@ private:
     
     // 私有方法
     void handleRotation();
+    void handleButtonISR();
     void handleButtonPress();
 };
 

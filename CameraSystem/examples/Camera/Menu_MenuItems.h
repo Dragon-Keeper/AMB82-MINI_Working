@@ -38,7 +38,8 @@ typedef enum {
     MENU_OPERATION_CONTRAST,        // 对比度设置
     MENU_OPERATION_SATURATION,      // 饱和度设置
     MENU_OPERATION_RESET_DEFAULTS,  // 重置默认参数
-    MENU_OPERATION_EXPOSURE_SELECT   // 曝光模式选择确认
+    MENU_OPERATION_EXPOSURE_SELECT, // 曝光模式选择确认
+    MENU_OPERATION_FILE_TRANSFER    // WiFi文件传输
 } MenuOperation;
 
 // 菜单项结构

@@ -122,6 +122,9 @@ void handleEncoderButton();
 #include "Inmp441_MicrophoneManager.h"
 #include "MJPEG_Encoder.h"
 
+// 包含WiFi文件服务器模块头文件
+#include "WiFi_WiFiFileServer.h"
+
 // 时间更新开关：设置为1时，刷入固件会更新DS1307时间；设置为0时，不会更新时间
 #define UPDATE_DS1307_TIME 0 // 停止时间更新
 
@@ -141,6 +144,9 @@ SDCardManager sdCardManager;
 
 // 模块化移植：阶段四 - 编码器控制实例
 EncoderControl encoder;
+
+// WiFi文件服务器实例
+WiFiFileServerModule wifiFileServer;
 
 // 麦克风管理器实例（已在Inmp441_MicrophoneManager.cpp中定义）
 
@@ -323,7 +329,7 @@ void setup() {
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_B, "FunctionB", taskFunctionB, 4096, 1); // 增加堆栈大小以支持视频录制
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_C, "FunctionC", taskFunctionC, 4096, 1); // 增加堆栈大小以避免溢出
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_D, "FunctionD", taskFunctionD, 1024, 1);
-    TaskFactory::registerTask(TaskManager::TASK_FUNCTION_E, "FunctionE", taskFunctionE, 1024, 1);
+    TaskFactory::registerTask(TaskManager::TASK_FUNCTION_E, "FunctionE", taskFunctionE, 8192, 1);
     TaskFactory::registerTask(TaskManager::TASK_SYSTEM_SETTINGS, "SystemSettings", taskSystemSettings, 1024, 1);
     TaskFactory::registerTask(TaskManager::TASK_TIME_SYNC, "TimeSync", taskTimeSync, 2048, 1); // 注册后台校时任务
     TaskFactory::registerTask(TaskManager::TASK_AUDIO_PROCESSING, "AudioProcessing", taskAudioProcessing, 2048, 4); // 注册音频处理任务（优先级4）
@@ -558,6 +564,12 @@ void loop() {
                     Utils_Logger::info("主菜单D位置：创建ISP配置任务");
                     // 只有当任务创建成功时，才更新系统状态
                     if (TaskFactory::createDefaultTask(TaskManager::TASK_FUNCTION_D)) {
+                        StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
+                    }
+                } else if (currentMenuItem == POS_E) {
+                    // E位置按下：创建WiFi文件传输任务
+                    Utils_Logger::info("主菜单E位置：创建WiFi文件传输任务");
+                    if (TaskFactory::createDefaultTask(TaskManager::TASK_FUNCTION_E)) {
                         StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
                     }
                 } else if (currentMenuItem == POS_F) {

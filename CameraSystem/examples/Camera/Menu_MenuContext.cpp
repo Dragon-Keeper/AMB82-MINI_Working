@@ -208,6 +208,10 @@ bool MenuContext::handleEvent(MenuEventType event) {
                         case MENU_OPERATION_CAPTURE:
                             Utils_Logger::info("[MenuContext] 执行拍照操作");
                             break;
+
+                        case MENU_OPERATION_FILE_TRANSFER:
+                            Utils_Logger::info("[MenuContext] 执行WiFi文件传输操作");
+                            break;
                             
                         case MENU_OPERATION_RECORD:
                             Utils_Logger::info("[MenuContext] 执行录像操作");

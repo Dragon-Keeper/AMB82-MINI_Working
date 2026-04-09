@@ -33,9 +33,9 @@ static const MenuItem mainMenuItems[] = {
         .dataIndex = 3
     },
     {
-        .label = "",
-        .type = MENU_ITEM_TYPE_NONE,
-        .operation = MENU_OPERATION_NONE,
+        .label = "文件传输",
+        .type = MENU_ITEM_TYPE_FUNCTION,
+        .operation = MENU_OPERATION_FILE_TRANSFER,
         .dataIndex = 4
     },
     {

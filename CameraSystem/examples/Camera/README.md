@@ -31,7 +31,7 @@
 ## 系统版本
 
 
-**当前版本**：V1.31
+**当前版本**：V1.34
 
 ## 功能特点
 
@@ -459,6 +459,54 @@ Camera/
 - 检查ENCODER_CLK、ENCODER_DT、ENCODER_SW引脚配置
 
 ## 版本历史
+
+### V1.34 (2026-04-09)
+- **选项E（WiFi文件传输）功能完善**：
+  - 实现两步退出确认机制（Cancel/Confirm选择界面）
+  - 退出菜单英文文本正确显示
+  - 按压Confirm后立即关闭文件传输并返回主菜单
+  - 解决Cancel选项按压后无法返回初始菜单的问题
+- **编码器输入可靠性增强**：
+  - 解决系统上电后误检测编码器按钮按下的问题
+  - 增加`m_buttonEverReleased`标志，确保只在实际按压时响应
+  - ISR防抖时间从150ms增加到200ms
+  - 移除`checkButton()`中ISR路径的引脚二次验证，避免快速按压事件丢失
+- **WiFi文件服务器稳定性修复**：
+  - 修复重新进入选项E时"Accept connection failed"错误
+  - 修复刷新页面无内容显示的问题
+  - 添加`forceShutdown()`方法确保连接立即终止
+  - 在阻塞操作中添加关闭检查点
+- **文件服务器网页UI样式修复**：
+  - 对齐库文件设计：添加header区域（标题+描述）
+  - 修正按钮布局（flex布局，批量按钮+退出按钮并排）
+  - 修正表格类名（`file-list`替代`file-table`）
+  - 修正全选复选框位置（移入表头，使用`tsa()`函数）
+  - 移除冗余内联JS脚本（HTML_HEADER已定义）
+- **剩余空间显示修复**：
+  - 修复剩余空间MB信息无法正确显示的问题
+  - 将`long long`类型强制转换为`unsigned long`
+
+### V1.33 (2026-03-31)
+- **编译错误修复**：ISP配置模块集成优化
+  - 解决FatFS.h头文件未找到问题（改用AmebaFatFS）
+  - 修复FILE_READ/FILE_WRITE宏未定义问题
+  - 替换ROTATION_CLOCKWISE为ROTATION_CW/ROTATION_CCW
+  - 修复ST7789_DARKGREY颜色未定义问题
+  - 为ISPConfigManager添加setConfig()方法
+  - 将CameraManager的applyISPSettings()设为public
+  - 修正Display_TFTManager方法名（drawRect→drawRectangle）
+  - 解决静态回调方法访问权限问题
+  - 简化taskISPConfig()实现，移除TaskFactory依赖
+
+### V1.32 (2026-03-31)
+- **ISPControl移植：阶段三 完整用户配置界面开发**
+  - 创建ISPConfigUI类，实现配置界面显示和交互
+  - 创建ISPConfigTask类，实现配置任务逻辑
+  - 集成到选项D，替换原占位功能
+  - 实现实时预览，参数调节立即生效
+  - 参数保存到SD卡的ISPControl.ini文件
+  - 支持曝光模式、亮度、对比度、饱和度调节
+  - 友好UI界面，带红色选择框和参数条显示
 
 ### V1.31 (2026-04-06)
 - **VOE初始化优化**：彻底解决"VOE not init"警告问题

@@ -19,6 +19,9 @@ EncoderControl::EncoderControl() :
     m_lastButtonState(HIGH),
     m_lastButtonTime(0),
     m_buttonPressDetected(false),
+    m_lastButtonInterruptTime(0),
+    m_buttonEverReleased(false),
+    m_initCompleteTime(0),
     m_debounceDelay(BUTTON_DEBOUNCE_DELAY),
     m_lastInterruptTime(0),
     m_lastValidRotationTime(0),
@@ -26,7 +29,6 @@ EncoderControl::EncoderControl() :
     m_rotationCallback(nullptr),
     m_buttonCallback(nullptr)
 {
-    // 设置静态实例指针
     s_instance = this;
 }
 
@@ -41,16 +43,41 @@ bool EncoderControl::init(uint8_t clkPin, uint8_t dtPin, uint8_t swPin)
     m_dtPin = dtPin;
     m_swPin = swPin;
     
-    // 配置编码器引脚
+    m_buttonEverReleased = false;
+    m_buttonPressDetected = false;
+    m_rotationDetected = false;
+    m_rotationDirection = ROTATION_NONE;
+    m_encoderCount = 0;
+    m_lastButtonState = HIGH;
+    
     pinMode(m_clkPin, INPUT_IRQ_FALL);
     pinMode(m_dtPin, INPUT_PULLUP);
     pinMode(m_swPin, INPUT_PULLUP);
     
-    // 注册中断处理函数
+    delay(100);
+    
+    for (int i = 0; i < 10; i++) {
+        if (digitalRead(m_swPin) == HIGH) {
+            m_buttonEverReleased = true;
+            break;
+        }
+        delay(10);
+    }
+    
+    m_initCompleteTime = millis() + 3000;
+    
     digitalSetIrqHandler(m_clkPin, encoderRotation_handler);
     
-    Utils_Logger::info("编码器引脚配置完成");
+    delay(50);
+    
+    digitalSetIrqHandler(m_swPin, encoderButton_handler);
+    
+    m_lastInterruptTime = micros();
+    m_lastButtonInterruptTime = micros();
+    
+    Utils_Logger::info("编码器引脚配置完成（旋转+按钮中断模式），3秒稳定期");
     Utils_Logger::info("CLK引脚: %d, DT引脚: %d, SW引脚: %d", m_clkPin, m_dtPin, m_swPin);
+    Utils_Logger::info("按钮初始释放状态: %s", m_buttonEverReleased ? "已释放" : "未释放(等待)");
     
     return true;
 }
@@ -92,24 +119,38 @@ void EncoderControl::setRotationDebounceTime(unsigned long us)
 
 void EncoderControl::checkButton()
 {
+    if (millis() < m_initCompleteTime) return;
+
     bool currentButtonState = digitalRead(m_swPin);
+
+    if (currentButtonState == HIGH) {
+        m_buttonEverReleased = true;
+    }
+
+    if (!m_buttonEverReleased) {
+        m_lastButtonState = currentButtonState;
+        m_buttonPressDetected = false;
+        return;
+    }
+
+    if (m_buttonPressDetected) {
+        m_buttonPressDetected = false;
+        handleButtonPress();
+        return;
+    }
+    
     unsigned long currentTime = Utils_Timer::getCurrentTime();
     
-    // 检测按钮按下（下降沿）
     if (currentButtonState == LOW && m_lastButtonState == HIGH) {
-        // 消抖处理
         if (currentTime - m_lastButtonTime >= m_debounceDelay) {
             m_lastButtonTime = currentTime;
             handleButtonPress();
         }
     }
     
-    // 检测按钮释放（上升沿）
     if (currentButtonState == HIGH && m_lastButtonState == LOW) {
-        // 消抖处理
         if (currentTime - m_lastButtonTime >= m_debounceDelay) {
             m_lastButtonTime = currentTime;
-            // 按钮释放处理（如果需要）
         }
     }
     
@@ -118,35 +159,50 @@ void EncoderControl::checkButton()
 
 void EncoderControl::cleanup()
 {
-    // 移除中断处理
     if (m_clkPin != 0) {
         digitalSetIrqHandler(m_clkPin, nullptr);
     }
+    if (m_swPin != 0) {
+        digitalSetIrqHandler(m_swPin, nullptr);
+    }
     
-    // 重置状态变量
     m_encoderCount = 0;
     m_rotationDetected = false;
     m_rotationDirection = ROTATION_NONE;
     m_buttonPressDetected = false;
     
-    // 清空回调函数
     m_rotationCallback = nullptr;
     m_buttonCallback = nullptr;
     
     Utils_Logger::info("编码器资源清理完成");
 }
 
-// 静态中断处理函数
+void EncoderControl::clearPendingEvents()
+{
+    m_rotationDetected = false;
+    m_rotationDirection = ROTATION_NONE;
+    m_buttonPressDetected = false;
+    m_encoderCount = 0;
+}
+
 void EncoderControl::encoderRotation_handler(uint32_t id, uint32_t event)
 {
-    // 通过静态实例指针调用实例方法
     if (s_instance != nullptr) {
         s_instance->handleRotation();
     }
 }
 
+void EncoderControl::encoderButton_handler(uint32_t id, uint32_t event)
+{
+    if (s_instance != nullptr) {
+        s_instance->handleButtonISR();
+    }
+}
+
 void EncoderControl::handleRotation()
 {
+    if (millis() < m_initCompleteTime) return;
+    
     unsigned long currentTime = micros();
     
     if (currentTime - m_lastInterruptTime < 100000) {
@@ -164,6 +220,24 @@ void EncoderControl::handleRotation()
     }
     
     m_rotationDetected = true;
+}
+
+void EncoderControl::handleButtonISR()
+{
+    if (millis() < m_initCompleteTime) return;
+    
+    if (!m_buttonEverReleased) return;
+    
+    if (digitalRead(m_swPin) != LOW) return;
+    
+    unsigned long currentTime = micros();
+    
+    if (currentTime - m_lastButtonInterruptTime < 200000) {
+        return;
+    }
+    
+    m_lastButtonInterruptTime = currentTime;
+    m_buttonPressDetected = true;
 }
 
 void EncoderControl::checkRotation()
@@ -188,11 +262,8 @@ void EncoderControl::checkRotation()
 
 void EncoderControl::handleButtonPress()
 {
-    m_buttonPressDetected = true;
-    
     Utils_Logger::info("编码器按钮按下");
     
-    // 如果有按钮回调函数，立即调用
     if (m_buttonCallback != nullptr) {
         m_buttonCallback();
     }

@@ -7,6 +7,63 @@
 
 ## 开发记录
 
+### 版本 V1.34 - 选项E（WiFi文件传输）功能完善与编码器稳定性增强 (2026-04-09)
+
+#### 问题描述
+根据用户反馈和Bug清单，系统存在以下问题：
+1. **旋转编码器误触发**：系统上电后，在未操作旋转编码器的情况下，系统错误检测到旋转编码器按钮被按下，自动进入选项A的拍照功能
+2. **Cancel选项无效**：在选项E中通过旋转旋钮选择"Cancel"选项后，按压开关未能返回选项E菜单（初始菜单界面）
+3. **网页UI样式异常**：访问192.168.1.1文件服务器后，网页UI样式与库文件设计不一致
+4. **剩余空间显示缺失**：文件服务器网页上没有正确显示"剩余空间:MB"信息
+5. **重新进入选项E失败**：从主菜单再次进入选项E时，串口监视器持续弹出"Accept connection failed"错误，刷新页面无内容显示
+
+#### 根本原因分析
+1. **编码器误触发**：上电时编码器引脚处于不稳定状态，ISR在未确认按钮实际按下时就触发了事件
+2. **Cancel选项无效**：`checkButton()` 在ISR路径中额外验证了引脚状态 `digitalRead(m_swPin) == LOW`，由于编码器监控任务每20ms才调用一次，用户快速按下并释放按钮后引脚已变为HIGH，导致事件被丢弃
+3. **网页UI不一致**：项目版本的 `sendFileListPage()` 使用了不同的HTML布局和CSS类名（如 `file-table` 替代 `file-list`），且缺少header区域和退出按钮
+4. **剩余空间显示**：`freeSpaceMB` 是 `long long` 类型，AmebaPro2 平台的 `WiFiClient::print()` 不支持该类型参数
+
+
+5. **重新进入失败**：`handleClientRequest()` 中存在阻塞操作，缺少关闭检查点，无法立即响应关闭请求
+
+#### 技术方案
+1. **Encoder_Control.cpp - handleButtonISR() 修改**：
+   - 增加 `m_buttonEverReleased` 检查：只有按钮至少被释放过一次后才处理按下事件
+   - ISR 防抖时间从 150ms 增加到 200ms
+   - 确保在初始化稳定期（3秒）内不响应任何按钮事件
+
+2. **Encoder_Control.cpp - checkButton() 修改**：
+   - 移除 ISR 路径中的引脚状态二次验证，直接调用 `handleButtonPress()`
+   - ISR 已在触发时验证引脚状态，二次验证会导致快速按压事件丢失
+
+3. **WiFi_WiFiFileServer.cpp - sendFileListPage() 替换**：
+   - 使用库文件版本替换项目版本
+   - 添加 header 区域（标题+描述）
+   - 修正按钮布局（flex布局，批量按钮+退出按钮并排）
+   - 修正表格类名（`file-list` 替代 `file-table`）
+   - 修正全选复选框位置（移入表头，使用 `tsa()` 函数）
+   - 移除冗余内联JS脚本（HTML_HEADER已定义）
+   - 保留项目的 `m_shutdownRequested` 关闭检查逻辑
+
+4. **剩余空间显示修复**：
+   - 将 `client.print(freeSpaceMB)` 改为 `client.print((unsigned long)freeSpaceMB)`
+
+#### 核心修复内容
+- ✅ 编码器误触发问题已解决：增加 `m_buttonEverReleased` 标志和 200ms ISR 防抖
+- ✅ Cancel选项按压响应问题已解决：移除 `checkButton()` 中的引脚二次验证
+- ✅ 文件服务器网页UI样式已修复：对齐库文件设计
+- ✅ 剩余空间显示问题已修复：类型强制转换
+- ✅ 重新进入选项E稳定性已改善：保留 `forceShutdown()` 和关闭检查点
+
+#### 文件变更
+- `Encoder_Control.cpp`：修改 `handleButtonISR()` 和 `checkButton()` 方法
+- `WiFi_WiFiFileServer.cpp`：替换 `sendFileListPage()` 为库版本
+- `Shared_GlobalDefines.h`：版本号从 V1.33 更新到 V1.34
+- `README.md`：添加 V1.34 版本历史记录
+- `Memory.md`：添加 V1.34 开发记录
+
+---
+
 ### 版本 V1.33 - 修复编译错误：ISP配置模块集成优化 (2026-03-31)
 
 #### 问题描述

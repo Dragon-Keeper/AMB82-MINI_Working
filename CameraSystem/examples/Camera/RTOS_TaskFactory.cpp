@@ -19,6 +19,7 @@
 #include "ISP_ConfigUI.h"
 #include "Menu_ParamSettings.h"
 #include "System_ConfigManager.h"
+#include "WiFi_WiFiFileServer.h"
 
 // 外部全局对象声明
 extern Display_TFTManager tftManager;
@@ -523,55 +524,187 @@ void taskFunctionD(void* pvParameters) {
     taskParamSettings(pvParameters);
 }
 
+static void wifiFileServerHandleEncoderRotation(RotationDirection direction) {
+    Utils_Logger::info("[WiFiFile] Encoder rotation event received, direction=%d", (int)direction);
+    if (wifiFileServer.isRunning() && wifiFileServer.canAcceptEncoderInput()) {
+        if (wifiFileServer.getExitConfirmed()) {
+            wifiFileServer.toggleExitSelection();
+            wifiFileServer.updateExitSelectionDisplay();
+            if (wifiFileServer.getExitSelection()) {
+                Utils_Logger::info("[WiFiFile] Rotate - Select [Confirm]");
+            } else {
+                Utils_Logger::info("[WiFiFile] Rotate - Select [Cancel]");
+            }
+        } else {
+            Utils_Logger::info("[WiFiFile] Rotate - Show exit menu");
+            wifiFileServer.displayConfirmExit();
+        }
+    } else {
+        Utils_Logger::info("[WiFiFile] Rotation ignored - running=%d, canAccept=%d", 
+                          wifiFileServer.isRunning(), wifiFileServer.canAcceptEncoderInput());
+    }
+}
+
+static void wifiFileServerHandleEncoderButton() {
+    Utils_Logger::info("[WiFiFile] Encoder button press event received");
+    if (wifiFileServer.isRunning() && wifiFileServer.canAcceptEncoderInput()) {
+        if (wifiFileServer.getExitConfirmed()) {
+            if (wifiFileServer.getExitSelection()) {
+                Utils_Logger::info("[WiFiFile] Button - Exit confirmed");
+                wifiFileServer.displayExitProgress();
+                wifiFileServer.forceShutdown();
+                delay(200);
+                TaskManager::setEvent(EVENT_RETURN_TO_MENU);
+            } else {
+                Utils_Logger::info("[WiFiFile] Button - Cancel, back to info");
+                wifiFileServer.setExitConfirmed(false);
+                wifiFileServer.displayCancelFeedback();
+                delay(800);
+                wifiFileServer.displayInfo();
+            }
+        } else {
+            Utils_Logger::info("[WiFiFile] Button - Show exit menu");
+            wifiFileServer.displayConfirmExit();
+        }
+    } else {
+        Utils_Logger::info("[WiFiFile] Button ignored - running=%d, canAccept=%d",
+                          wifiFileServer.isRunning(), wifiFileServer.canAcceptEncoderInput());
+    }
+}
+
 /**
- * 功能模块E任务 (位置E)
+ * Function E Task - WiFi File Transfer
  */
+static TaskHandle_t s_encoderMonitorTaskHandle = NULL;
+
+static void encoderMonitorTaskFunc(void* pvParameters) {
+    Utils_Logger::info("[EncoderMonitor] Task started (priority 3)");
+    
+    while (1) {
+        encoder.checkRotation();
+        encoder.checkButton();
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
 void taskFunctionE(void* pvParameters) {
-    // 解析任务参数
     TaskFactory::TaskParams* params = static_cast<TaskFactory::TaskParams*>(pvParameters);
     uint32_t taskId = (params != NULL) ? params->param1 : 4;
-    
-    Utils_Logger::info("功能模块E任务 %c 启动", (char)('A' + taskId));
-    
-    // 任务主循环
+
+    Utils_Logger::info("[WiFiFile] Task %c started", (char)('A' + taskId));
+
+    StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
+
+    if (!wifiFileServer.init(sdCardManager, tftManager, fontRenderer)) {
+        Utils_Logger::error("[WiFiFile] Init failed");
+        StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
+        TaskManager::clearEvent(EVENT_ALL_TASKS_CLEAR);
+        TaskManager::markTaskAsDeleting(TaskManager::TASK_FUNCTION_E);
+        if (params != NULL) delete params;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    if (!wifiFileServer.start()) {
+        Utils_Logger::error("[WiFiFile] Start failed");
+        wifiFileServer.cleanup();
+        menuContext.switchToMainMenu();
+        menuContext.showMenu();
+        StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
+        TaskManager::clearEvent(EVENT_ALL_TASKS_CLEAR);
+        TaskManager::markTaskAsDeleting(TaskManager::TASK_FUNCTION_E);
+        if (params != NULL) delete params;
+        vTaskDelete(NULL);
+        return;
+    }
+
+    encoder.setRotationCallback(wifiFileServerHandleEncoderRotation);
+    encoder.setButtonCallback(wifiFileServerHandleEncoderButton);
+
+    s_encoderMonitorTaskHandle = NULL;
+    xTaskCreate(
+        encoderMonitorTaskFunc,
+        "EncMonitor",
+        2048,
+        NULL,
+        3,
+        &s_encoderMonitorTaskHandle
+    );
+    Utils_Logger::info("[WiFiFile] Encoder monitor task created (priority 3)");
+
+    Utils_Logger::info("[WiFiFile] Ready, waiting for user input");
+
+    unsigned long lastLoopLogTime = millis();
+    int loopCount = 0;
+
     while (1) {
-        // 检查是否需要退出任务
+        if (wifiFileServer.isShutdownRequested() ||
+            wifiFileServer.getState() != WiFiFileServerModule::STATE_RUNNING) {
+            Utils_Logger::info("[WiFiFile] Shutdown detected, exiting loop immediately");
+            break;
+        }
+
+        wifiFileServer.processLoop();
+
+        if (wifiFileServer.isShutdownRequested() ||
+            wifiFileServer.getState() != WiFiFileServerModule::STATE_RUNNING) {
+            Utils_Logger::info("[WiFiFile] Shutdown detected after processLoop, exiting");
+            break;
+        }
+
         uint32_t uxBits = TaskManager::waitForEvent(
             EVENT_RETURN_TO_MENU,
             true,
-            100 / portTICK_PERIOD_MS
+            10 / portTICK_PERIOD_MS
         );
-        
+
         if ((uxBits & EVENT_RETURN_TO_MENU) != 0) {
+            Utils_Logger::info("[WiFiFile] Exit signal received");
             break;
         }
-        
-        // 任务功能实现
-        // TODO: 实现功能模块E的具体逻辑
-        
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+
+        loopCount++;
+        if (millis() - lastLoopLogTime >= 5000) {
+            Utils_Logger::info("[WiFiFile] Main loop running, count=%d, elapsed=%lums", 
+                              loopCount, millis() - wifiFileServer.getStartTime());
+            lastLoopLogTime = millis();
+        }
     }
-    
-    // 首先清除退出事件标志，防止残留影响新任务
+
+    Utils_Logger::info("[WiFiFile] Cleaning up...");
+
+    if (s_encoderMonitorTaskHandle != NULL) {
+        vTaskDelete(s_encoderMonitorTaskHandle);
+        s_encoderMonitorTaskHandle = NULL;
+        Utils_Logger::info("[WiFiFile] Encoder monitor task deleted");
+    }
+
+    wifiFileServer.stop();
+    wifiFileServer.cleanup();
+
     TaskManager::clearEvent(EVENT_RETURN_TO_MENU);
-    
-    // 更新系统状态返回到主菜单
+
+    extern void handleEncoderRotation(RotationDirection direction);
+    extern void handleEncoderButton();
+    encoder.setRotationCallback(handleEncoderRotation);
+    encoder.setButtonCallback(handleEncoderButton);
+    Utils_Logger::info("[WiFiFile] Encoder callbacks reset");
+
+    menuContext.switchToMainMenu();
+    menuContext.showMenu();
+
     StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
-    
-    // 清除所有事件标志，确保系统状态干净
+
     TaskManager::clearEvent(EVENT_ALL_TASKS_CLEAR);
-    
-    // 更新任务状态信息
+
     TaskManager::markTaskAsDeleting(TaskManager::TASK_FUNCTION_E);
-    
-    Utils_Logger::info("功能模块E任务 %c 退出", (char)('A' + taskId));
-    
-    // 清理任务参数
+
+    Utils_Logger::info("[WiFiFile] Task %c exited", (char)('A' + taskId));
+
     if (params != NULL) {
         delete params;
     }
-    
-    // 删除任务
+
     vTaskDelete(NULL);
 }
 
