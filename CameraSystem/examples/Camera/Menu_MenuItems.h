@@ -39,7 +39,12 @@ typedef enum {
     MENU_OPERATION_SATURATION,      // 饱和度设置
     MENU_OPERATION_RESET_DEFAULTS,  // 重置默认参数
     MENU_OPERATION_EXPOSURE_SELECT, // 曝光模式选择确认
-    MENU_OPERATION_FILE_TRANSFER    // WiFi文件传输
+    MENU_OPERATION_FILE_TRANSFER,   // WiFi文件传输
+    MENU_OPERATION_REBOOT,          // 重启系统
+    MENU_OPERATION_TIME_SYNC,       // 校对时间
+    MENU_OPERATION_SHUTDOWN,        // 关闭系统
+    MENU_OPERATION_OTA,            // 系统升级
+    MENU_OPERATION_VERSION         // 版本信息
 } MenuOperation;
 
 // 菜单项结构

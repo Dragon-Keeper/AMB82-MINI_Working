@@ -49,39 +49,39 @@ static const MenuItem mainMenuItems[] = {
 // 子菜单项定义
 static const MenuItem subMenuItems[] = {
     {
-        .label = "图像设置",
-        .type = MENU_ITEM_TYPE_SETTING,
-        .operation = MENU_OPERATION_SETTINGS,
+        .label = "校对时间",
+        .type = MENU_ITEM_TYPE_FUNCTION,
+        .operation = MENU_OPERATION_TIME_SYNC,
         .dataIndex = 0
     },
     {
-        .label = "录像设置",
-        .type = MENU_ITEM_TYPE_SETTING,
-        .operation = MENU_OPERATION_SETTINGS,
+        .label = "重启",
+        .type = MENU_ITEM_TYPE_FUNCTION,
+        .operation = MENU_OPERATION_REBOOT,
         .dataIndex = 1
     },
     {
-        .label = "系统设置",
-        .type = MENU_ITEM_TYPE_PARAM_SETTINGS,
-        .operation = MENU_OPERATION_PARAM_SETTINGS,
+        .label = "关闭系统",
+        .type = MENU_ITEM_TYPE_NONE,
+        .operation = MENU_OPERATION_NONE,
         .dataIndex = 2
     },
     {
-        .label = "返回",
-        .type = MENU_ITEM_TYPE_FUNCTION,
-        .operation = MENU_OPERATION_BACK,
+        .label = "系统升级",
+        .type = MENU_ITEM_TYPE_NONE,
+        .operation = MENU_OPERATION_NONE,
         .dataIndex = 3
     },
     {
-        .label = "",
-        .type = MENU_ITEM_TYPE_NONE,
-        .operation = MENU_OPERATION_NONE,
+        .label = "版本信息",
+        .type = MENU_ITEM_TYPE_FUNCTION,
+        .operation = MENU_OPERATION_VERSION,
         .dataIndex = 4
     },
     {
-        .label = "",
-        .type = MENU_ITEM_TYPE_NONE,
-        .operation = MENU_OPERATION_NONE,
+        .label = "返回主菜单",
+        .type = MENU_ITEM_TYPE_FUNCTION,
+        .operation = MENU_OPERATION_BACK,
         .dataIndex = 5
     }
 };

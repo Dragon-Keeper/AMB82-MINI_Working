@@ -4,6 +4,7 @@
  */
 
 #include "Inmp441_MicrophoneManager.h"
+#include "Utils_Logger.h"
 
 // 全局麦克风管理器实例
 Inmp441MicrophoneManager g_microphoneManager;
@@ -113,49 +114,22 @@ Inmp441MicrophoneManager::~Inmp441MicrophoneManager() {
 }
 
 bool Inmp441MicrophoneManager::init() {
-    Serial.println("\n");
-    Serial.println("========================================");
-    Serial.println("  INMP441 麦克风音频采集系统 v3.0");
-    Serial.println("  开发板: AMB82-MINI");
-    Serial.println("  功能: 实时采集 + SD卡录音");
-    Serial.println("========================================");
-    Serial.println();
-    
-    printUsage();
-    Serial.println();
-    
-    Serial.println("========== 硬件连接验证 ==========");
-    hardwareConnectionCheck();
-    Serial.println();
-    
-    Serial.println("========== 初始化SD卡 ==========");
+    Utils_Logger::info("INMP441麦克风初始化...");
+
     if (!initSDCard()) {
-        Serial.println("[警告] SD卡初始化失败，录音功能不可用");
-    } else {
-        Serial.println("[SD] SD卡初始化成功");
+        Utils_Logger::info("SD卡初始化失败，录音功能不可用");
     }
-    Serial.println();
-    
-    Serial.println("========== 初始化I2S ==========");
+
     if (!initI2S()) {
-        Serial.println("[致命错误] I2S初始化失败，系统停止");
-        Serial.println("[提示] 检查硬件连接是否正确");
+        Utils_Logger::error("I2S初始化失败");
         return false;
     }
-    
+
     m_startTime = millis();
     m_running = true;
-    
-    Serial.println();
-    Serial.println("========== 初始化完成 ==========");
-    Serial.println("系统已就绪，可开始采集音频数据");
-    Serial.println("----------------------------------------");
-    Serial.println("输出格式说明:");
-    Serial.println("  文本模式: 时间戳(ms) | 采样值(int16) | 信号等级(0-3)");
-    Serial.println("  绘图器模式: 直接输出原始采样值");
-    Serial.println("----------------------------------------");
-    Serial.println();
-    
+
+    Utils_Logger::info("INMP441麦克风初始化完成");
+
     return true;
 }
 

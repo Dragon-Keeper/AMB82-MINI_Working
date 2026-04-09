@@ -7,6 +7,15 @@
 #include "Menu_MenuContext.h"
 #include "Camera_CameraManager.h"
 #include "Menu_ParamSettings.h"
+#include "PowerMode.h"
+#include "sys_api.h"
+#include "Shared_GlobalDefines.h"
+
+static const uint8_t strConfirmReboot[] = {FONT16_IDX_QUE2, FONT16_IDX_REN2, FONT16_IDX_CHONG, FONT16_IDX_QI3, 0};
+static const uint8_t strBack[]          = {FONT16_IDX_FAN2, FONT16_IDX_HUI2, 0};
+static const uint8_t strReboot[]        = {FONT16_IDX_CHONG, FONT16_IDX_QI3, 0};
+static const uint8_t strRebooting[]     = {FONT16_IDX_CHONG, FONT16_IDX_QI3, FONT16_IDX_ZHONG2, 0};
+static const uint8_t strVersion[]       = {FONT16_IDX_BAN2, FONT16_IDX_BEN2, FONT16_IDX_XIN2, FONT16_IDX_XI4, 0};
 
 // 前向声明全局菜单上下文对象
 extern MenuContext menuContext;
@@ -30,6 +39,16 @@ void handleEncoderRotation(RotationDirection direction) {
         switch (StateManager::getInstance().getCurrentState()) {
             case STATE_MAIN_MENU:
             case STATE_SUB_MENU:
+                // 如果在重启确认对话框中，处理对话框选项切换
+                if (menuContext.isInRebootConfirm()) {
+                    if (direction == ROTATION_CW) {
+                        menuContext.setConfirmDefaultBack(false);
+                    } else if (direction == ROTATION_CCW) {
+                        menuContext.setConfirmDefaultBack(true);
+                    }
+                    menuContext.showRebootConfirmDialog();
+                    break;
+                }
                 // 菜单模式：使用MenuContext处理旋转事件
                 if (direction == ROTATION_CW) {
                     menuContext.handleEvent(MENU_EVENT_DOWN);
@@ -249,7 +268,32 @@ bool MenuContext::handleEvent(MenuEventType event) {
                             menuManager.switchToPageByType(MENU_PAGE_MAIN);
                             triangleController.resetPosition();
                             break;
-                            
+
+                        case MENU_OPERATION_TIME_SYNC:
+                            Utils_Logger::info("[MenuContext] 执行校对时间操作");
+                            if (TaskManager::getTaskState(TaskManager::TASK_TIME_SYNC) != TASK_STATE_DELETED) {
+                                TaskManager::markTaskAsDeleting(TaskManager::TASK_TIME_SYNC);
+                            }
+                            if (TaskFactory::createDefaultTask(TaskManager::TASK_TIME_SYNC)) {
+                                Utils_Logger::info("校对时间任务启动成功");
+                            } else {
+                                Utils_Logger::error("校对时间任务启动失败");
+                            }
+                            break;
+
+                        case MENU_OPERATION_SHUTDOWN:
+                            Utils_Logger::info("[MenuContext] 关闭系统功能暂未开放");
+                            break;
+
+                        case MENU_OPERATION_OTA:
+                            Utils_Logger::info("[MenuContext] 系统升级功能暂未开放");
+                            break;
+
+                        case MENU_OPERATION_VERSION:
+                            Utils_Logger::info("[MenuContext] 显示版本信息");
+                            showVersionInfo();
+                            break;
+
                         default:
                             Utils_Logger::info("[MenuContext] 未处理的菜单项操作: %d", item->operation);
                             break;
@@ -367,6 +411,23 @@ void MenuContext::handleSubMenu() {
     // 子菜单中的旋转和按钮事件现在通过EncoderControl回调函数处理
     // MenuContext会自动协调菜单管理器和三角形控制器
     
+    // 如果在重启确认对话框中，处理对话框交互
+    if (inRebootConfirm) {
+        if (StateManager::getInstance().isButtonPressDetected()) {
+            StateManager::getInstance().setButtonPressDetected(false);
+            
+            if (confirmDefaultBack) {
+                // 默认选中"返回"，退出确认对话框
+                hideRebootConfirmDialog();
+                triangleController.moveToPosition(TriangleController::POSITION_B);
+            } else {
+                // 选中"重启"，执行重启
+                executeReboot();
+            }
+        }
+        return;
+    }
+    
     // 处理按钮事件（只在F位置返回主菜单）
     if (StateManager::getInstance().isButtonPressDetected()) {
         StateManager::getInstance().setButtonPressDetected(false);
@@ -375,22 +436,37 @@ void MenuContext::handleSubMenu() {
             // F位置按下：返回主菜单
             Utils_Logger::info("子菜单F位置：返回主菜单");
             switchToMainMenu();
+        } else if (getCurrentMenuItem() == POS_B) {
+            // B位置按下：显示重启确认对话框
+            Utils_Logger::info("子菜单B位置：显示重启确认对话框");
+            rebootConfirmPosB = POS_B;
+            confirmDefaultBack = true;
+            inRebootConfirm = true;
+            showRebootConfirmDialog();
         } else if (getCurrentMenuItem() == POS_A) {
-            // A位置按下：启动后台校时功能
-            Utils_Logger::info("子菜单A位置：启动后台校时功能");
-            
+            // A位置按下：启动校对时间功能
+            Utils_Logger::info("子菜单A位置：启动校对时间功能");
+
             // 检查任务状态，如果不是删除状态，就标记为删除状态
             if (TaskManager::getTaskState(TaskManager::TASK_TIME_SYNC) != TASK_STATE_DELETED) {
                 Utils_Logger::info("将现有任务标记为删除状态");
                 TaskManager::markTaskAsDeleting(TaskManager::TASK_TIME_SYNC);
             }
-            
+
             // 创建新任务
             if (TaskFactory::createDefaultTask(TaskManager::TASK_TIME_SYNC)) {
-                Utils_Logger::info("后台校时任务启动成功");
+                Utils_Logger::info("校对时间任务启动成功");
             } else {
-                Utils_Logger::error("后台校时任务启动失败");
+                Utils_Logger::error("校对时间任务启动失败");
             }
+        } else if (getCurrentMenuItem() == POS_C) {
+            Utils_Logger::info("子菜单C位置：功能暂未开放");
+        } else if (getCurrentMenuItem() == POS_D) {
+            Utils_Logger::info("子菜单D位置：功能暂未开放");
+        } else if (getCurrentMenuItem() == POS_E) {
+            // E位置按下：版本信息
+            Utils_Logger::info("子菜单E位置：版本信息");
+            showVersionInfo();
         } else {
             // 其他位置按下：无操作，仅显示位置信息
             Utils_Logger::info("子菜单非F位置按下：位置%c", (char)('A' + getCurrentMenuItem()));
@@ -454,4 +530,177 @@ void MenuContext::cleanup() {
     StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
     
     Utils_Logger::info("[MenuContext] 资源清理完成");
+}
+
+void MenuContext::showRebootConfirmDialog() {
+    Utils_Logger::info("显示重启确认对话框");
+
+    const int screenWidth = 320;
+    const int screenHeight = 240;
+
+    const int dialogWidth = 200;
+    const int dialogHeight = 90;
+    const int dialogX = (screenWidth - dialogWidth) / 2;
+    const int dialogY = (screenHeight - dialogHeight) / 2;
+
+    tftManager.fillRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_BLACK);
+    tftManager.drawRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_WHITE);
+
+    const int titleY = dialogY + (dialogHeight - 16) / 2 - 14;
+    const int btnY = dialogY + (dialogHeight - 16) / 2 + 14;
+
+    int16_t titleX = fontRenderer.calculateCenterPosition(dialogWidth, strConfirmReboot) + dialogX;
+    fontRenderer.drawChineseString(titleX, titleY, strConfirmReboot, ST7789_WHITE, ST7789_BLACK);
+
+    const int triWidth = 10;
+    const int btnSpacing = 70;
+    const int totalBtnWidth = triWidth + 8 + fontRenderer.getStringLength(strBack) * 16 + btnSpacing + triWidth + 8 + fontRenderer.getStringLength(strReboot) * 16;
+    const int btnStartX = (screenWidth - totalBtnWidth) / 2;
+    const int backTextX = btnStartX + triWidth + 8;
+    const int rebootTextX = backTextX + btnSpacing + triWidth + 8;
+
+    if (confirmDefaultBack) {
+        tftManager.setCursor(btnStartX, btnY);
+        tftManager.setTextColor(ST7789_YELLOW);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(backTextX, btnY, strBack, ST7789_YELLOW, ST7789_BLACK);
+        tftManager.setCursor(rebootTextX - triWidth - 8, btnY);
+        tftManager.setTextColor(ST7789_WHITE);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(rebootTextX, btnY, strReboot, ST7789_WHITE, ST7789_BLACK);
+    } else {
+        tftManager.setCursor(btnStartX, btnY);
+        tftManager.setTextColor(ST7789_WHITE);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(backTextX, btnY, strBack, ST7789_WHITE, ST7789_BLACK);
+        tftManager.setCursor(rebootTextX - triWidth - 8, btnY);
+        tftManager.setTextColor(ST7789_YELLOW);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(rebootTextX, btnY, strReboot, ST7789_YELLOW, ST7789_BLACK);
+    }
+}
+
+void MenuContext::hideRebootConfirmDialog() {
+    Utils_Logger::info("隐藏重启确认对话框");
+
+    inRebootConfirm = false;
+    confirmDefaultBack = true;
+    rebootConfirmPosB = -1;
+
+    showMenu();
+}
+
+void MenuContext::executeReboot() {
+    Utils_Logger::info("执行系统重启...");
+
+    inRebootConfirm = false;
+    confirmDefaultBack = true;
+    rebootConfirmPosB = -1;
+
+    tftManager.fillScreen(ST7789_BLACK);
+
+    int16_t rebootX = fontRenderer.calculateCenterPosition(320, strRebooting);
+    fontRenderer.drawChineseString(rebootX, 112, strRebooting, ST7789_YELLOW, ST7789_BLACK);
+
+    Utils_Logger::info("系统即将重启...");
+    delay(1000);
+
+    sys_reset();
+}
+
+void MenuContext::executeShutdown() {
+    Utils_Logger::info("执行关闭系统（深度睡眠）...");
+
+    tftManager.fillScreen(ST7789_BLACK);
+    tftManager.setCursor(50, 150);
+    tftManager.print("entering deep sleep...");
+
+    delay(500);
+
+    PowerMode.begin(DEEPSLEEP_MODE, -1, 0, 0);
+    PowerMode.start();
+}
+
+void MenuContext::executeOTA() {
+    Utils_Logger::info("执行系统升级（OTA）...");
+
+    tftManager.fillScreen(ST7789_BLACK);
+    tftManager.setCursor(30, 150);
+    tftManager.print("OTA update starting...");
+
+    delay(1000);
+
+    // OTA更新逻辑将通过WiFiFileServer或其他OTA模块处理
+    // 这里仅显示提示信息
+}
+
+static void formatDate(const char* srcDate, char* dstBuf) {
+    char monthStr[4] = {0};
+    int day = 0, year = 0;
+    sscanf(srcDate, "%3s %d %d", monthStr, &day, &year);
+
+    int month = 1;
+    if (!strcmp(monthStr, "Jan")) month = 1;
+    else if (!strcmp(monthStr, "Feb")) month = 2;
+    else if (!strcmp(monthStr, "Mar")) month = 3;
+    else if (!strcmp(monthStr, "Apr")) month = 4;
+    else if (!strcmp(monthStr, "May")) month = 5;
+    else if (!strcmp(monthStr, "Jun")) month = 6;
+    else if (!strcmp(monthStr, "Jul")) month = 7;
+    else if (!strcmp(monthStr, "Aug")) month = 8;
+    else if (!strcmp(monthStr, "Sep")) month = 9;
+    else if (!strcmp(monthStr, "Oct")) month = 10;
+    else if (!strcmp(monthStr, "Nov")) month = 11;
+    else if (!strcmp(monthStr, "Dec")) month = 12;
+
+    sprintf(dstBuf, "%04d-%02d-%02d", year, month, day);
+}
+
+void MenuContext::showVersionInfo() {
+    Utils_Logger::info("显示版本信息...");
+
+    const int screenWidth = 320;
+    const int screenHeight = 240;
+
+    const int dialogWidth = 210;
+    const int dialogHeight = 160;
+    const int dialogX = (screenWidth - dialogWidth) / 2;
+    const int dialogY = (screenHeight - dialogHeight) / 2;
+
+    tftManager.fillRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_BLACK);
+    tftManager.drawRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_WHITE);
+
+    int16_t titleX = fontRenderer.calculateCenterPosition(dialogWidth, strVersion) + dialogX;
+    fontRenderer.drawChineseString(titleX, dialogY + 14, strVersion, ST7789_WHITE, ST7789_BLACK);
+
+    const int textLeft = dialogX + 20;
+    const int lineHeight = 22;
+    int lineY = dialogY + 40;
+
+    tftManager.setCursor(textLeft, lineY);
+    tftManager.print("Ver: ");
+    tftManager.print(SYSTEM_VERSION_STRING);
+
+    lineY += lineHeight;
+    tftManager.setCursor(textLeft, lineY);
+    tftManager.print("FW: v4.0.9");
+
+    lineY += lineHeight;
+    char dateBuf[12];
+    formatDate(__DATE__, dateBuf);
+    tftManager.setCursor(textLeft, lineY);
+    tftManager.print("Build: ");
+    tftManager.print(dateBuf);
+
+    lineY += lineHeight;
+    tftManager.setCursor(textLeft, lineY);
+    tftManager.print("Cam: GC2053");
+
+    lineY += lineHeight;
+    tftManager.setCursor(textLeft, lineY);
+    tftManager.print("Board: AMB82-MINI");
+
+    delay(4000);
+
+    showMenu();
 }

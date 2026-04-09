@@ -53,15 +53,27 @@ private:
     ParamSettingsMenu *paramSettingsMenu; // 参数设置菜单指针
     bool isInitialized = false;
     bool inParamSettings = false;     // 是否在参数设置菜单中
+    bool inRebootConfirm = false;     // 是否在重启确认对话框中
+    bool confirmDefaultBack = true;    // 确认对话框默认选中"返回"选项
+    int rebootConfirmPosB = -1;        // 保存进入确认对话框时的B位置
     
     // 菜单项数量配置
     int maxMenuItems = 6; // A-F共6个选项
-    
+
 public:
+    // 确认对话框绘制（需要在回调函数中调用）
+    void showRebootConfirmDialog();
+    void hideRebootConfirmDialog();
+    void executeReboot();
+    void executeShutdown();
+    void executeOTA();
+    void showVersionInfo();
+
     // 构造函数
     MenuContext(MenuManager &menuManager, TriangleController &triangleController)
-        : menuManager(menuManager), triangleController(triangleController), 
-          paramSettingsMenu(nullptr), inParamSettings(false) {}
+        : menuManager(menuManager), triangleController(triangleController),
+          paramSettingsMenu(nullptr), inParamSettings(false), inRebootConfirm(false),
+          confirmDefaultBack(true), rebootConfirmPosB(-1) {}
     
     // 初始化菜单上下文
     bool init();
@@ -79,6 +91,15 @@ public:
     MenuPageType getCurrentPageType() const {
         return menuManager.getCurrentPageType();
     }
+    
+    // 获取确认对话框默认选中状态
+    bool isConfirmDefaultBack() const { return confirmDefaultBack; }
+    
+    // 设置确认对话框选中状态
+    void setConfirmDefaultBack(bool value) { confirmDefaultBack = value; }
+    
+    // 获取重启确认对话框状态
+    bool isInRebootConfirm() const { return inRebootConfirm; }
     
     // 获取当前选中的菜单项信息
     const MenuItem *getCurrentMenuItemInfo() const;
