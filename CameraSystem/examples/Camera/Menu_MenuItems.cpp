@@ -68,8 +68,8 @@ static const MenuItem subMenuItems[] = {
     },
     {
         .label = "系统升级",
-        .type = MENU_ITEM_TYPE_NONE,
-        .operation = MENU_OPERATION_NONE,
+        .type = MENU_ITEM_TYPE_FUNCTION,
+        .operation = MENU_OPERATION_OTA,
         .dataIndex = 3
     },
     {

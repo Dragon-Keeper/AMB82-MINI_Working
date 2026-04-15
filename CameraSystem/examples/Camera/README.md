@@ -31,7 +31,7 @@
 ## 系统版本
 
 
-**当前版本**：V1.34
+**当前版本**：V1.35
 
 ## 功能特点
 
@@ -97,6 +97,8 @@
 - **NTP校时**：使用国内NTP服务器列表进行时间同步
 - **多服务器选择**：自动尝试多个NTP服务器，提高成功率
 - **自动断开**：时间同步完成后自动断开WiFi，节省资源
+- **OTA在线升级**：支持通过WiFi进行固件在线升级
+- **WiFi文件传输**：支持通过WiFi服务器下载SD卡中的文件
 
 ### 电源管理
 - **12V电源输入**：确保系统稳定运行
@@ -113,8 +115,8 @@
 | B | 录像功能 | TASK_FUNCTION_B | 1 | 4096 |
 | C | 回放功能 | TASK_FUNCTION_C | 1 | 4096 |
 | D | 拍照参数设置功能 | TASK_FUNCTION_D | 1 | 1024 |
-| E | 预留功能 | TASK_FUNCTION_E | 1 | 1024 |
-| F | 系统设置子菜单 | TASK_SYSTEM_SETTINGS | 1 | 1024 |
+| E | 预留功能 | TASK_FUNCTION_E | 1 | 8192 |
+| F | 系统设置子菜单（含OTA） | TASK_SYSTEM_SETTINGS | 1 | 4096 |
 | - | 后台校时任务 | TASK_TIME_SYNC | 1 | 2048 |
 | - | 音频处理任务 | TASK_AUDIO_PROCESSING | 4 | 2048 |
 | - | 视频帧获取任务 | TASK_VIDEO_FRAME_CAPTURE | 5 | 2048 |
@@ -332,11 +334,18 @@
 ### 位置D：系统升级
 - 升级系统固件
 - 支持在线升级
-- 确保系统稳定性和功能完善
+- WiFi连接策略：Force SSID(3次) → Tiger SSID(3次) → 保存的SSID
+- IP号段验证：确保设备IP与OTA服务器IP在同一号段
+- 退出确认对话框：升级中按压按钮弹出确认窗口
+  - 显示"Exit OTA"标题
+  - 提供"返回"和"确认"选项
+  - 旋转编码器切换选项
+  - 选择"返回"继续升级，选择"确认"退出升级并释放资源
+- 资源自动清理：退出时自动释放WiFi连接和OTA线程资源
 
 ### 位置E：版本信息
 - 显示系统版本信息对话框（居中于横屏屏幕）
-- **项目迭代版本**：来自 `SYSTEM_VERSION_STRING` 宏定义（如 `V1.34`）
+- **项目迭代版本**：来自 `SYSTEM_VERSION_STRING` 宏定义（如 `V1.35`）
 - **固件版本**：`v4.0.9`（Arduino SDK版本）
 - **编译日期**：自动从 `__DATE__` 格式化显示（如 `2025-04-09`）
 - **摄像头型号**：`GC2053`
@@ -417,7 +426,13 @@ Camera/
 ├── MJPEG_Encoder.cpp         # MJPEG编码器
 ├── MJPEG_Encoder.h           # MJPEG编码器头文件
 ├── Inmp441_MicrophoneManager.cpp  # 麦克风管理器
-└── Inmp441_MicrophoneManager.h    # 麦克风管理器头文件
+├── Inmp441_MicrophoneManager.h    # 麦克风管理器头文件
+├── OTA.cpp                        # OTA升级模块
+├── OTA.h                          # OTA升级头文件
+├── ota_drv.cpp                    # OTA驱动
+├── ota_drv.h                      # OTA驱动头文件
+├── WiFi_WiFiFileServer.cpp        # WiFi文件服务器
+└── WiFi_WiFiFileServer.h          # WiFi文件服务器头文件
 ```
 
 ## 编译和上传
@@ -464,7 +479,16 @@ Camera/
 
 ## 版本历史
 
-### V1.35 (开发中)
+### V1.35 (2026-04-15)
+- **OTA升级功能完善**：
+  - 实现完整的OTA升级工作流程（6阶段）
+  - WiFi连接策略：Force SSID(3次) → Tiger SSID(3次) → 保存的SSID
+  - IP号段验证：确保设备IP与OTA服务器IP在同一号段
+  - 添加退出确认对话框，支持"返回"和"确认"选项
+  - 资源自动清理：退出时自动释放WiFi连接和OTA线程资源
+  - 禁用WiFi驱动自动重连，防止意外干扰
+
+### V1.34 (2026-04-09)
 - **重启确认对话框字库错误修复**：
   - 修复打开确认重启对话框时出现"无效的字库索引: 136"错误
   - 移除字库渲染`>`符号，改用`tftManager.print(">")`直接输出ASCII字符

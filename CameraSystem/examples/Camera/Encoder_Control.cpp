@@ -248,12 +248,9 @@ void EncoderControl::checkRotation()
         if (currentTime - m_lastValidRotationTime >= m_rotationDebounceUs) {
             m_lastValidRotationTime = currentTime;
             m_rotationCallback(m_rotationDirection);
-            Utils_Logger::info("编码器旋转事件已处理: 方向=%d, 防抖延迟=%dus",
-                             m_rotationDirection, m_rotationDebounceUs);
             m_rotationDetected = false;
             m_rotationDirection = ROTATION_NONE;
         } else {
-            Utils_Logger::info("忽略快速旋转事件（严格消抖处理）");
             m_rotationDetected = false;
             m_rotationDirection = ROTATION_NONE;
         }

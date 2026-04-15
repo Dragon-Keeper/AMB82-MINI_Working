@@ -125,6 +125,12 @@ void handleEncoderButton();
 // 包含WiFi文件服务器模块头文件
 #include "WiFi_WiFiFileServer.h"
 
+// 包含OTA升级模块头文件
+#include "OTA.h"
+
+// 创建OTA升级模块实例
+OTA ota;
+
 // 时间更新开关：设置为1时，刷入固件会更新DS1307时间；设置为0时，不会更新时间
 #define UPDATE_DS1307_TIME 0 // 停止时间更新
 
@@ -176,6 +182,9 @@ void setup() {
     // 初始化串口
     Serial.begin(115200);
     
+    //OTA功能测试判断输出
+    //Serial.println("OTA功能上传测试，看见这句话说明OTA成功了。");
+
     // 初始化DS1307时钟模块
     if (clockModule.initialize()) {
         Serial.println("DS1307时钟模块初始化成功");
@@ -225,6 +234,7 @@ void setup() {
     }
     
     Utils_Logger::info("\n=== AMB82-MINI相机控制系统启动 ===");
+    Utils_Logger::info("当前版本: %s", SYSTEM_VERSION_STRING);
     Utils_Logger::info("使用16x16点阵字库显示提示文字");
     
     // 初始化TFT屏幕（使用TFT管理器）
@@ -330,7 +340,7 @@ void setup() {
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_C, "FunctionC", taskFunctionC, 4096, 1); // 增加堆栈大小以避免溢出
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_D, "FunctionD", taskFunctionD, 1024, 1);
     TaskFactory::registerTask(TaskManager::TASK_FUNCTION_E, "FunctionE", taskFunctionE, 8192, 1);
-    TaskFactory::registerTask(TaskManager::TASK_SYSTEM_SETTINGS, "SystemSettings", taskSystemSettings, 1024, 1);
+    TaskFactory::registerTask(TaskManager::TASK_SYSTEM_SETTINGS, "SystemSettings", taskSystemSettings, 4096, 1); // 增加堆栈大小以支持OTA功能
     TaskFactory::registerTask(TaskManager::TASK_TIME_SYNC, "TimeSync", taskTimeSync, 2048, 1); // 注册后台校时任务
     TaskFactory::registerTask(TaskManager::TASK_AUDIO_PROCESSING, "AudioProcessing", taskAudioProcessing, 2048, 4); // 注册音频处理任务（优先级4）
     TaskFactory::registerTask(TaskManager::TASK_VIDEO_FRAME_CAPTURE, "VideoFrameCapture", taskVideoFrameCapture, 2048, 5); // 注册视频帧获取任务（优先级5）

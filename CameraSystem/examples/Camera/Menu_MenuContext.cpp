@@ -10,15 +10,23 @@
 #include "PowerMode.h"
 #include "sys_api.h"
 #include "Shared_GlobalDefines.h"
+#include "OTA.h"
+#include <WiFi.h>
+#include "wifi_conf.h"
 
 static const uint8_t strConfirmReboot[] = {FONT16_IDX_QUE2, FONT16_IDX_REN2, FONT16_IDX_CHONG, FONT16_IDX_QI3, 0};
 static const uint8_t strBack[]          = {FONT16_IDX_FAN2, FONT16_IDX_HUI2, 0};
 static const uint8_t strReboot[]        = {FONT16_IDX_CHONG, FONT16_IDX_QI3, 0};
 static const uint8_t strRebooting[]     = {FONT16_IDX_CHONG, FONT16_IDX_QI3, FONT16_IDX_ZHONG2, 0};
 static const uint8_t strVersion[]       = {FONT16_IDX_BAN2, FONT16_IDX_BEN2, FONT16_IDX_XIN2, FONT16_IDX_XI4, 0};
+static const uint8_t strConfirmOta[]    = {FONT16_IDX_QUE2, FONT16_IDX_REN2, FONT16_IDX_SHENG2, FONT16_IDX_JI2, 0};
+static const uint8_t strConfirmExit[]   = {FONT16_IDX_QUE2, FONT16_IDX_REN2, 0};
+static const uint8_t strOta[]           = {FONT16_IDX_SHENG2, FONT16_IDX_JI2, 0};
+static const uint8_t strOtaProgress[]   = {FONT16_IDX_SHENG2, FONT16_IDX_JI2, FONT16_IDX_ZHONG2, 0};
 
 // 前向声明全局菜单上下文对象
 extern MenuContext menuContext;
+extern EncoderControl encoder;
 
 // 编码器旋转回调函数实现
 void handleEncoderRotation(RotationDirection direction) {
@@ -47,6 +55,35 @@ void handleEncoderRotation(RotationDirection direction) {
                         menuContext.setConfirmDefaultBack(true);
                     }
                     menuContext.showRebootConfirmDialog();
+                    break;
+                }
+                // 如果在OTA确认对话框中，处理对话框选项切换
+                if (menuContext.isInOtaConfirm()) {
+                    if (direction == ROTATION_CW) {
+                        menuContext.setOtaConfirmDefaultBack(false);
+                    } else if (direction == ROTATION_CCW) {
+                        menuContext.setOtaConfirmDefaultBack(true);
+                    }
+                    menuContext.showOtaConfirmDialog();
+                    break;
+                }
+                // 如果在OTA服务器IP配置界面中，处理字段数值调整
+                if (menuContext.isInOtaIpConfig()) {
+                    menuContext.handleOtaIpRotation(direction);
+                    break;
+                }
+                // 如果在OTA升级中界面退出对话框已显示，处理对话框选项切换
+                if (menuContext.isInOtaProgress() && menuContext.isOtaExitDialogShown()) {
+                    if (direction == ROTATION_CW) {
+                        menuContext.setOtaProgressDefaultBack(false);
+                    } else if (direction == ROTATION_CCW) {
+                        menuContext.setOtaProgressDefaultBack(true);
+                    }
+                    menuContext.showOtaProgressExitDialog();
+                    break;
+                }
+                // 如果在OTA升级中界面但对话框未显示，忽略旋转事件
+                if (menuContext.isInOtaProgress()) {
                     break;
                 }
                 // 菜单模式：使用MenuContext处理旋转事件
@@ -93,7 +130,19 @@ void handleEncoderRotation(RotationDirection direction) {
 // 编码器按钮回调函数实现
 void handleEncoderButton() {
     Utils_Logger::info("编码器按钮按下");
-    
+
+    // 如果在OTA升级中界面，处理退出确认逻辑
+    if (menuContext.isInOtaProgress()) {
+        if (menuContext.isOtaExitDialogShown()) {
+            Utils_Logger::info("[OTA_EXIT] 对话框已显示，处理按钮选择");
+            menuContext.handleOtaProgressExitButton();
+        } else {
+            Utils_Logger::info("[OTA_EXIT] OTA升级中界面：显示退出确认对话框");
+            menuContext.showOtaProgressExitDialog();
+        }
+        return;
+    }
+
     // 根据当前系统状态处理按钮事件
     switch (StateManager::getInstance().getCurrentState()) {
         case STATE_MAIN_MENU:
@@ -101,7 +150,7 @@ void handleEncoderButton() {
             // 菜单模式：由loop()中的buttonPressDetected处理逻辑处理
             StateManager::getInstance().setButtonPressDetected(true);
             break;
-            
+
         case STATE_CAMERA_PREVIEW:
             // 根据当前运行的任务类型区分处理逻辑
             if (TaskManager::getTaskState(TaskManager::TASK_CAMERA_PREVIEW) == TASK_STATE_RUNNING) {
@@ -114,7 +163,7 @@ void handleEncoderButton() {
                 TaskManager::setEvent(EVENT_RETURN_TO_MENU);
             }
             break;
-            
+
         default:
             Utils_Logger::error("未知系统状态：无法处理按钮事件");
             break;
@@ -417,13 +466,53 @@ void MenuContext::handleSubMenu() {
             StateManager::getInstance().setButtonPressDetected(false);
             
             if (confirmDefaultBack) {
-                // 默认选中"返回"，退出确认对话框
                 hideRebootConfirmDialog();
                 triangleController.moveToPosition(TriangleController::POSITION_B);
             } else {
-                // 选中"重启"，执行重启
                 executeReboot();
             }
+        }
+        return;
+    }
+    
+    // 如果在OTA确认对话框中，处理对话框交互
+    if (inOtaConfirm) {
+        if (StateManager::getInstance().isButtonPressDetected()) {
+            StateManager::getInstance().setButtonPressDetected(false);
+
+            if (otaConfirmDefaultBack) {
+                hideOtaConfirmDialog();
+                triangleController.moveToPosition(TriangleController::POSITION_D);
+            } else {
+                inOtaConfirm = false;
+                otaConfirmDefaultBack = true;
+                otaConfirmPosD = -1;
+                showOtaIpConfig();
+            }
+        }
+        return;
+    }
+
+    // 如果在OTA升级中界面，只处理按钮事件（旋转由handleEncoderRotation处理）
+    if (inOtaProgress) {
+        if (StateManager::getInstance().isButtonPressDetected()) {
+            StateManager::getInstance().setButtonPressDetected(false);
+            if (otaExitDialogShown) {
+                Utils_Logger::info("[OTA_EXIT] 检测到按钮按下，调用handleOtaProgressExitButton");
+                handleOtaProgressExitButton();
+            } else {
+                Utils_Logger::info("[OTA_EXIT] 检测到按钮按下，显示退出确认对话框");
+                showOtaProgressExitDialog();
+            }
+        }
+        return;
+    }
+
+    // 如果在OTA服务器IP配置界面中，处理按钮事件
+    if (isInOtaIpConfig()) {
+        if (StateManager::getInstance().isButtonPressDetected()) {
+            StateManager::getInstance().setButtonPressDetected(false);
+            handleOtaIpButton();
         }
         return;
     }
@@ -462,7 +551,12 @@ void MenuContext::handleSubMenu() {
         } else if (getCurrentMenuItem() == POS_C) {
             Utils_Logger::info("子菜单C位置：功能暂未开放");
         } else if (getCurrentMenuItem() == POS_D) {
-            Utils_Logger::info("子菜单D位置：功能暂未开放");
+            // D位置按下：显示OTA确认对话框
+            Utils_Logger::info("子菜单D位置：显示OTA确认对话框");
+            otaConfirmPosD = POS_D;
+            otaConfirmDefaultBack = true;
+            inOtaConfirm = true;
+            showOtaConfirmDialog();
         } else if (getCurrentMenuItem() == POS_E) {
             // E位置按下：版本信息
             Utils_Logger::info("子菜单E位置：版本信息");
@@ -538,42 +632,45 @@ void MenuContext::showRebootConfirmDialog() {
     const int screenWidth = 320;
     const int screenHeight = 240;
 
-    const int dialogWidth = 200;
-    const int dialogHeight = 90;
+    const int dialogWidth = 220;
+    const int dialogHeight = 100;
     const int dialogX = (screenWidth - dialogWidth) / 2;
     const int dialogY = (screenHeight - dialogHeight) / 2;
 
     tftManager.fillRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_BLACK);
     tftManager.drawRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_WHITE);
 
-    const int titleY = dialogY + (dialogHeight - 16) / 2 - 14;
-    const int btnY = dialogY + (dialogHeight - 16) / 2 + 14;
-
+    const int titleY = dialogY + 20;
     int16_t titleX = fontRenderer.calculateCenterPosition(dialogWidth, strConfirmReboot) + dialogX;
     fontRenderer.drawChineseString(titleX, titleY, strConfirmReboot, ST7789_WHITE, ST7789_BLACK);
 
-    const int triWidth = 10;
-    const int btnSpacing = 70;
-    const int totalBtnWidth = triWidth + 8 + fontRenderer.getStringLength(strBack) * 16 + btnSpacing + triWidth + 8 + fontRenderer.getStringLength(strReboot) * 16;
-    const int btnStartX = (screenWidth - totalBtnWidth) / 2;
-    const int backTextX = btnStartX + triWidth + 8;
-    const int rebootTextX = backTextX + btnSpacing + triWidth + 8;
+    const int btnY = dialogY + 55;
+    const int btnAreaWidth = dialogWidth - 20;
+    const int backBtnWidth = fontRenderer.getStringLength(strBack) * 16;
+    const int rebootBtnWidth = fontRenderer.getStringLength(strReboot) * 16;
+    const int totalBtnWidth = backBtnWidth + 20 + rebootBtnWidth;
+    const int btnStartX = dialogX + (btnAreaWidth - totalBtnWidth) / 2;
+
+    const int backTextX = btnStartX + backBtnWidth;
+    const int rebootTextX = backTextX + 20 + rebootBtnWidth;
 
     if (confirmDefaultBack) {
-        tftManager.setCursor(btnStartX, btnY);
+        tftManager.setCursor(btnStartX - 12, btnY);
         tftManager.setTextColor(ST7789_YELLOW);
         tftManager.print(">");
-        fontRenderer.drawChineseString(backTextX, btnY, strBack, ST7789_YELLOW, ST7789_BLACK);
-        tftManager.setCursor(rebootTextX - triWidth - 8, btnY);
+        fontRenderer.drawChineseString(btnStartX, btnY, strBack, ST7789_YELLOW, ST7789_BLACK);
+
+        tftManager.setCursor(backTextX + 8, btnY);
         tftManager.setTextColor(ST7789_WHITE);
         tftManager.print(">");
         fontRenderer.drawChineseString(rebootTextX, btnY, strReboot, ST7789_WHITE, ST7789_BLACK);
     } else {
-        tftManager.setCursor(btnStartX, btnY);
+        tftManager.setCursor(btnStartX - 12, btnY);
         tftManager.setTextColor(ST7789_WHITE);
         tftManager.print(">");
-        fontRenderer.drawChineseString(backTextX, btnY, strBack, ST7789_WHITE, ST7789_BLACK);
-        tftManager.setCursor(rebootTextX - triWidth - 8, btnY);
+        fontRenderer.drawChineseString(btnStartX, btnY, strBack, ST7789_WHITE, ST7789_BLACK);
+
+        tftManager.setCursor(backTextX + 8, btnY);
         tftManager.setTextColor(ST7789_YELLOW);
         tftManager.print(">");
         fontRenderer.drawChineseString(rebootTextX, btnY, strReboot, ST7789_YELLOW, ST7789_BLACK);
@@ -608,6 +705,67 @@ void MenuContext::executeReboot() {
     sys_reset();
 }
 
+void MenuContext::showOtaConfirmDialog() {
+    Utils_Logger::info("显示OTA确认对话框");
+
+    const int screenWidth = 320;
+    const int screenHeight = 240;
+
+    const int dialogWidth = 220;
+    const int dialogHeight = 100;
+    const int dialogX = (screenWidth - dialogWidth) / 2;
+    const int dialogY = (screenHeight - dialogHeight) / 2;
+
+    tftManager.fillRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_BLACK);
+    tftManager.drawRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_WHITE);
+
+    const int titleY = dialogY + 20;
+    int16_t titleX = fontRenderer.calculateCenterPosition(dialogWidth, strConfirmOta) + dialogX;
+    fontRenderer.drawChineseString(titleX, titleY, strConfirmOta, ST7789_WHITE, ST7789_BLACK);
+
+    const int btnY = dialogY + 55;
+    const int btnAreaWidth = dialogWidth - 20;
+    const int backBtnWidth = fontRenderer.getStringLength(strBack) * 16;
+    const int otaBtnWidth = fontRenderer.getStringLength(strOta) * 16;
+    const int totalBtnWidth = backBtnWidth + 20 + otaBtnWidth;
+    const int btnStartX = dialogX + (btnAreaWidth - totalBtnWidth) / 2;
+
+    const int backTextX = btnStartX + backBtnWidth;
+    const int otaTextX = backTextX + 20 + otaBtnWidth;
+
+    if (otaConfirmDefaultBack) {
+        tftManager.setCursor(btnStartX - 12, btnY);
+        tftManager.setTextColor(ST7789_YELLOW);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(btnStartX, btnY, strBack, ST7789_YELLOW, ST7789_BLACK);
+
+        tftManager.setCursor(backTextX + 8, btnY);
+        tftManager.setTextColor(ST7789_WHITE);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(otaTextX, btnY, strOta, ST7789_WHITE, ST7789_BLACK);
+    } else {
+        tftManager.setCursor(btnStartX - 12, btnY);
+        tftManager.setTextColor(ST7789_WHITE);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(btnStartX, btnY, strBack, ST7789_WHITE, ST7789_BLACK);
+
+        tftManager.setCursor(backTextX + 8, btnY);
+        tftManager.setTextColor(ST7789_YELLOW);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(otaTextX, btnY, strOta, ST7789_YELLOW, ST7789_BLACK);
+    }
+}
+
+void MenuContext::hideOtaConfirmDialog() {
+    Utils_Logger::info("隐藏OTA确认对话框");
+
+    inOtaConfirm = false;
+    otaConfirmDefaultBack = true;
+    otaConfirmPosD = -1;
+
+    showMenu();
+}
+
 void MenuContext::executeShutdown() {
     Utils_Logger::info("执行关闭系统（深度睡眠）...");
 
@@ -621,17 +779,487 @@ void MenuContext::executeShutdown() {
     PowerMode.start();
 }
 
-void MenuContext::executeOTA() {
-    Utils_Logger::info("执行系统升级（OTA）...");
+const char* MenuContext::getOtaStateText() {
+    extern OTA ota;
+    const char* state = ota.getState();
+    if (state == OTA::OtaState[0]) return "空闲";
+    if (state == OTA::OtaState[1]) return "已接收信号";
+    if (state == OTA::OtaState[2]) return "下载中...";
+    if (state == OTA::OtaState[3]) return "下载完成";
+    if (state == OTA::OtaState[4]) return "准备重启";
+    if (state == OTA::OtaState[5]) return "升级失败";
+    return "未知";
+}
+
+void MenuContext::updateOtaDisplay() {
+    if (!otaInProgress) return;
+
+    extern OTA ota;
+    const char* state = ota.getState();
+
+    tftManager.setTextColor(ST7789_CYAN, ST7789_BLACK);
+    tftManager.setCursor(10, 150);
+    tftManager.print("State:");
+    tftManager.setCursor(80, 150);
+    tftManager.print(getOtaStateText());
+
+    IPAddress deviceIP = WiFi.localIP();
+    if (deviceIP != IPAddress(0, 0, 0, 0)) {
+        tftManager.setTextColor(ST7789_GREEN, ST7789_BLACK);
+        tftManager.setCursor(10, 170);
+        tftManager.print("Device IP:");
+        tftManager.setCursor(100, 170);
+        char ipBuf[16];
+        sprintf(ipBuf, "%d.%d.%d.%d", deviceIP[0], deviceIP[1], deviceIP[2], deviceIP[3]);
+        tftManager.print(ipBuf);
+    }
+
+    if (state == OTA::OtaState[5]) {
+        tftManager.setTextColor(ST7789_RED, ST7789_BLACK);
+        tftManager.setCursor(40, 200);
+        tftManager.print("OTA failed, retrying...");
+
+        otaInProgress = false;
+
+        delay(5000);
+
+        showMenu();
+    }
+}
+
+void MenuContext::showOtaProgressScreen() {
+    Utils_Logger::info("重新显示OTA升级进度界面");
 
     tftManager.fillScreen(ST7789_BLACK);
-    tftManager.setCursor(30, 150);
-    tftManager.print("OTA update starting...");
 
-    delay(1000);
+    int16_t otaX = fontRenderer.calculateCenterPosition(320, strOtaProgress);
+    fontRenderer.drawChineseString(otaX, 90, strOtaProgress, ST7789_YELLOW, ST7789_BLACK);
 
-    // OTA更新逻辑将通过WiFiFileServer或其他OTA模块处理
-    // 这里仅显示提示信息
+    tftManager.setTextColor(ST7789_CYAN, ST7789_BLACK);
+    tftManager.setCursor(50, 130);
+    tftManager.print("Device IP: ");
+
+    if (WiFi.status() == WL_CONNECTED) {
+        IPAddress ip = WiFi.localIP();
+        char ipBuf[16];
+        sprintf(ipBuf, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+        tftManager.setTextColor(ST7789_GREEN, ST7789_BLACK);
+        tftManager.print(ipBuf);
+    }
+
+    tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+    tftManager.setCursor(50, 180);
+    tftManager.print("OTA Server: ");
+    tftManager.print(otaServerIpStr);
+}
+
+void MenuContext::showOtaProgressExitDialog() {
+    Utils_Logger::info("显示OTA升级中退出确认对话框");
+    otaExitDialogShown = true;
+
+    const int screenWidth = 320;
+    const int screenHeight = 240;
+
+    const int dialogWidth = 220;
+    const int dialogHeight = 100;
+    const int dialogX = (screenWidth - dialogWidth) / 2;
+    const int dialogY = (screenHeight - dialogHeight) / 2;
+
+    tftManager.fillRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_BLACK);
+    tftManager.drawRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_WHITE);
+
+    const int titleY = dialogY + 20;
+    tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+    tftManager.setCursor(dialogX + 60, titleY);
+    tftManager.print("Exit OTA");
+
+    const int btnY = dialogY + 55;
+    const int btnAreaWidth = dialogWidth - 20;
+    const int backBtnWidth = fontRenderer.getStringLength(strBack) * 16;
+    const int confirmBtnWidth = fontRenderer.getStringLength(strConfirmExit) * 16;
+    const int totalBtnWidth = backBtnWidth + 20 + confirmBtnWidth;
+    const int btnStartX = dialogX + (btnAreaWidth - totalBtnWidth) / 2;
+
+    const int backTextX = btnStartX + backBtnWidth;
+    const int confirmTextX = backTextX + 20 + confirmBtnWidth;
+
+    if (otaProgressDefaultBack) {
+        tftManager.setCursor(btnStartX - 12, btnY);
+        tftManager.setTextColor(ST7789_YELLOW);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(btnStartX, btnY, strBack, ST7789_YELLOW, ST7789_BLACK);
+
+        tftManager.setCursor(backTextX + 8, btnY);
+        tftManager.setTextColor(ST7789_WHITE);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(confirmTextX, btnY, strConfirmExit, ST7789_WHITE, ST7789_BLACK);
+    } else {
+        tftManager.setCursor(btnStartX - 12, btnY);
+        tftManager.setTextColor(ST7789_WHITE);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(btnStartX, btnY, strBack, ST7789_WHITE, ST7789_BLACK);
+
+        tftManager.setCursor(backTextX + 8, btnY);
+        tftManager.setTextColor(ST7789_YELLOW);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(confirmTextX, btnY, strConfirmExit, ST7789_YELLOW, ST7789_BLACK);
+    }
+}
+
+void MenuContext::handleOtaProgressExitRotation(RotationDirection direction) {
+    if (!inOtaProgress) return;
+
+    otaProgressDefaultBack = !otaProgressDefaultBack;
+    showOtaProgressExitDialog();
+}
+
+void MenuContext::handleOtaProgressExitButton() {
+    if (!inOtaProgress) return;
+
+    Utils_Logger::info("[OTA_EXIT] handleOtaProgressExitButton 被调用");
+
+    if (otaProgressDefaultBack) {
+        Utils_Logger::info("[OTA_EXIT] 用户选择返回，继续OTA升级");
+        otaExitDialogShown = false;
+        otaProgressDefaultBack = true;
+        showOtaProgressScreen();
+    } else {
+        Utils_Logger::info("[OTA_EXIT] 用户选择确认，退出OTA升级，释放资源并返回");
+
+        extern OTA ota;
+        ota.stop_OTA_threads();
+
+        Utils_Logger::info("[OTA_EXIT] 正在释放WiFi资源...");
+        wifi_config_autoreconnect(0, 0, 0);
+        WiFi.disconnect();
+        delay(500);
+
+        otaInProgress = false;
+        inOtaProgress = false;
+        otaExitDialogShown = false;
+        otaProgressDefaultBack = true;
+
+        tftManager.fillScreen(ST7789_BLACK);
+        tftManager.setCursor(50, 120);
+        tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+        tftManager.print("Exiting OTA...");
+
+        delay(1000);
+
+        triangleController.moveToPosition(TriangleController::POSITION_D);
+        showMenu();
+    }
+}
+
+void MenuContext::showOtaIpConfig() {
+    Utils_Logger::info("[OTA_IP] 进入服务器IP配置界面");
+
+    otaIpState = OTA_IP_STATE_FIELD_1;
+
+    tftManager.fillScreen(ST7789_BLACK);
+
+    tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+    tftManager.setTextSize(1);
+    tftManager.setCursor(30, 30);
+    tftManager.print("OTA Server IP Config");
+
+    tftManager.setCursor(40, 60);
+    tftManager.print("Rotate: +/-1");
+    tftManager.setCursor(40, 75);
+    tftManager.print("Press: Confirm field");
+
+    updateOtaIpDisplay();
+}
+
+void MenuContext::updateOtaIpDisplay() {
+    const int ipY = 120;
+    const int fieldWidth = 50;
+    const int dotWidth = 10;
+    const int totalWidth = fieldWidth * 4 + dotWidth * 3;
+    const int startX = (320 - totalWidth) / 2;
+
+    tftManager.fillRectangle(0, ipY - 10, 320, 50, ST7789_BLACK);
+
+    int currentX = startX;
+
+    for (int i = 0; i < 4; i++) {
+        bool isActive = (otaIpState == (OtaIpConfigState)(OTA_IP_STATE_FIELD_1 + i));
+
+        if (isActive) {
+            tftManager.fillRectangle(currentX - 2, ipY - 2, fieldWidth + 4, 30, ST7789_YELLOW);
+            tftManager.setTextColor(ST7789_BLACK, ST7789_YELLOW);
+        } else {
+            tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+        }
+
+        tftManager.setCursor(currentX + 8, ipY + 4);
+        char numBuf[4];
+        sprintf(numBuf, "%3d", otaServerIp[i]);
+        tftManager.print(numBuf);
+
+        currentX += fieldWidth;
+
+        if (i < 3) {
+            tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+            tftManager.setCursor(currentX + 2, ipY + 4);
+            tftManager.print(".");
+            currentX += dotWidth;
+        }
+    }
+
+    tftManager.setTextColor(ST7789_GRAY, ST7789_BLACK);
+    tftManager.setCursor(60, ipY + 40);
+    tftManager.print("Field ");
+    char fieldNumBuf[8];
+    sprintf(fieldNumBuf, "%d/4", (int)(otaIpState - OTA_IP_STATE_FIELD_1 + 1));
+    tftManager.print(fieldNumBuf);
+}
+
+void MenuContext::handleOtaIpRotation(RotationDirection direction) {
+    if (otaIpState < OTA_IP_STATE_FIELD_1 || otaIpState > OTA_IP_STATE_FIELD_4) {
+        return;
+    }
+
+    int fieldIndex = otaIpState - OTA_IP_STATE_FIELD_1;
+
+    if (direction == ROTATION_CW) {
+        otaServerIp[fieldIndex] = (otaServerIp[fieldIndex] == 255) ? 0 : otaServerIp[fieldIndex] + 1;
+    } else if (direction == ROTATION_CCW) {
+        otaServerIp[fieldIndex] = (otaServerIp[fieldIndex] == 0) ? 255 : otaServerIp[fieldIndex] - 1;
+    }
+
+    Utils_Logger::info("[OTA_IP] 字段%d调整为: %d", fieldIndex + 1, otaServerIp[fieldIndex]);
+
+    updateOtaIpDisplay();
+}
+
+void MenuContext::handleOtaIpButton() {
+    if (otaIpState < OTA_IP_STATE_FIELD_1 || otaIpState > OTA_IP_STATE_FIELD_4) {
+        return;
+    }
+
+    int fieldIndex = otaIpState - OTA_IP_STATE_FIELD_1;
+
+    Utils_Logger::info("[OTA_IP] 确认字段%d: %d", fieldIndex + 1, otaServerIp[fieldIndex]);
+
+    if (otaIpState == OTA_IP_STATE_FIELD_4) {
+        commitOtaServerIp();
+    } else {
+        otaIpState = (OtaIpConfigState)(otaIpState + 1);
+        updateOtaIpDisplay();
+    }
+}
+
+void MenuContext::commitOtaServerIp() {
+    sprintf(otaServerIpStr, "%d.%d.%d.%d",
+            otaServerIp[0], otaServerIp[1], otaServerIp[2], otaServerIp[3]);
+
+    Utils_Logger::info("[OTA_IP] IP地址已提交: %s", otaServerIpStr);
+
+    otaIpState = OTA_IP_STATE_SUBMITTED;
+
+    tftManager.fillRectangle(0, 160, 320, 80, ST7789_BLACK);
+    tftManager.setTextColor(ST7789_GREEN, ST7789_BLACK);
+    tftManager.setCursor(60, 175);
+    tftManager.print("IP Saved!");
+    tftManager.setCursor(60, 195);
+    tftManager.print(otaServerIpStr);
+
+    delay(1500);
+
+    executeOTA();
+}
+
+void MenuContext::executeOTA() {
+    if (otaInProgress) {
+        Utils_Logger::info("OTA升级正在进行中，忽略重复请求");
+        return;
+    }
+
+    Utils_Logger::info("执行系统升级（OTA）...");
+    otaInProgress = true;
+
+    inOtaConfirm = false;
+    otaConfirmDefaultBack = true;
+    otaConfirmPosD = -1;
+
+    tftManager.fillScreen(ST7789_BLACK);
+
+    int16_t otaX = fontRenderer.calculateCenterPosition(320, strOtaProgress);
+    fontRenderer.drawChineseString(otaX, 90, strOtaProgress, ST7789_YELLOW, ST7789_BLACK);
+
+    tftManager.setTextColor(ST7789_CYAN, ST7789_BLACK);
+    tftManager.setCursor(50, 130);
+    tftManager.print("Device IP: ");
+
+    tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+    tftManager.setCursor(50, 180);
+    tftManager.print("OTA Server: ");
+    tftManager.print(otaServerIpStr);
+
+    Utils_Logger::info("OTA升级启动...");
+    Utils_Logger::info("[OTA] OTA服务器: %s", otaServerIpStr);
+
+    extern OTA ota;
+    static char server[16] = "192.168.1.50";
+    strcpy(server, otaServerIpStr);
+    const int otaPort = 3000;
+
+    Utils_Logger::info("[OTA] 检查WiFi连接状态...");
+    Utils_Logger::info("[OTA] 按压键可取消OTA升级");
+
+    inOtaProgress = true;
+
+    WiFi.disconnect();
+    delay(500);
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Utils_Logger::info("[OTA] WiFi未连接，尝试连接网络...");
+
+        bool wifiConnected = false;
+        const int WIFI_RETRY_DELAY = 3000;
+        const int SAME_SSID_MAX_RETRIES = 3;
+        const int MAX_SSID_SWITCHES = 1;
+
+        const char* ssidList[2] = {"Force", "Tiger"};
+        const char* passwordList[2] = {"dd123456", "Dt5201314"};
+        int currentSsidIndex = 0;
+        int sameSsidRetryCount = 0;
+        int ssidSwitchCount = 0;
+        int totalAttemptCount = 0;
+
+        while (!wifiConnected) {
+            totalAttemptCount++;
+            const char* currentSsid = ssidList[currentSsidIndex];
+            const char* currentPassword = passwordList[currentSsidIndex];
+
+            Utils_Logger::info("[OTA] [%lu] 连接尝试 #%d - SSID[%d]: %s (当前SSID尝试次数: %d/%d)",
+                              millis(), totalAttemptCount, currentSsidIndex, currentSsid,
+                              sameSsidRetryCount + 1, SAME_SSID_MAX_RETRIES);
+
+            char ssidBuffer[32];
+            char passwordBuffer[32];
+            strncpy(ssidBuffer, currentSsid, sizeof(ssidBuffer) - 1);
+            strncpy(passwordBuffer, currentPassword, sizeof(passwordBuffer) - 1);
+            ssidBuffer[sizeof(ssidBuffer) - 1] = '\0';
+            passwordBuffer[sizeof(passwordBuffer) - 1] = '\0';
+
+            WiFi.begin(ssidBuffer, passwordBuffer);
+
+            int connectRetry = 0;
+            const int MAX_CONNECT_RETRIES = 10;
+
+            while (connectRetry < MAX_CONNECT_RETRIES && WiFi.status() != WL_CONNECTED) {
+                delay(500);
+                connectRetry++;
+            }
+
+            if (WiFi.status() == WL_CONNECTED) {
+                IPAddress obtainedIP = WiFi.localIP();
+                Utils_Logger::info("[OTA] [%lu] WiFi连接成功 - SSID: %s, IP: %d.%d.%d.%d",
+                                  millis(), ssidBuffer, obtainedIP[0], obtainedIP[1], obtainedIP[2], obtainedIP[3]);
+
+                if (obtainedIP[2] != otaServerIp[2]) {
+                    Utils_Logger::info("[OTA] [%lu] IP网段异常! 设备第3段=%d, 服务器第3段=%d",
+                                      millis(), obtainedIP[2], otaServerIp[2]);
+                    Utils_Logger::info("[OTA] [%lu] SSID[%d]=%s 重连尝试 %d/%d",
+                                      millis(), currentSsidIndex, currentSsid, sameSsidRetryCount + 1, SAME_SSID_MAX_RETRIES);
+
+                    WiFi.disconnect();
+                    delay(1000);
+                    sameSsidRetryCount++;
+
+                    if (sameSsidRetryCount >= SAME_SSID_MAX_RETRIES) {
+                        if (ssidSwitchCount < MAX_SSID_SWITCHES) {
+                            Utils_Logger::info("[OTA] [%lu] SSID[%d]=%s 已重连%d次仍异常，尝试切换SSID",
+                                              millis(), currentSsidIndex, currentSsid, SAME_SSID_MAX_RETRIES);
+                            sameSsidRetryCount = 0;
+                            currentSsidIndex = (currentSsidIndex == 0) ? 1 : 0;
+                            ssidSwitchCount++;
+                            const char* nextSsid = ssidList[currentSsidIndex];
+                            Utils_Logger::info("[OTA] [%lu] 切换到备选SSID[%d]: %s", millis(), currentSsidIndex, nextSsid);
+                        } else {
+                            Utils_Logger::info("[OTA] [%lu] 已切换SSID%d次，无更多备选SSID",
+                                              millis(), ssidSwitchCount);
+                            break;
+                        }
+                    }
+                    continue;
+                }
+
+                wifiConnected = true;
+                sameSsidRetryCount = 0;
+                Utils_Logger::info("[OTA] [%lu] WiFi连接验证通过! 最终SSID: %s, IP: %d.%d.%d.%d",
+                                  millis(), ssidBuffer, obtainedIP[0], obtainedIP[1], obtainedIP[2], obtainedIP[3]);
+                break;
+            } else {
+                Utils_Logger::error("[OTA] [%lu] WiFi连接失败 - SSID: %s, 状态: %d",
+                                   millis(), ssidBuffer, WiFi.status());
+                WiFi.disconnect();
+                delay(1000);
+
+                sameSsidRetryCount++;
+                if (sameSsidRetryCount >= SAME_SSID_MAX_RETRIES) {
+                    if (ssidSwitchCount < MAX_SSID_SWITCHES) {
+                        Utils_Logger::info("[OTA] [%lu] SSID[%d]=%s 连接失败%d次，尝试切换SSID",
+                                          millis(), currentSsidIndex, currentSsid, SAME_SSID_MAX_RETRIES);
+                        sameSsidRetryCount = 0;
+                        currentSsidIndex = (currentSsidIndex == 0) ? 1 : 0;
+                        ssidSwitchCount++;
+                        Utils_Logger::info("[OTA] [%lu] 切换到备选SSID[%d]: %s", millis(), currentSsidIndex, ssidList[currentSsidIndex]);
+                    } else {
+                        Utils_Logger::info("[OTA] [%lu] 已切换SSID%d次，无更多备选SSID",
+                                          millis(), ssidSwitchCount);
+                        break;
+                    }
+                }
+            }
+
+            if (!wifiConnected) {
+                Utils_Logger::info("[OTA] [%lu] 等待%dms后进行下一次连接尝试...",
+                                  millis(), WIFI_RETRY_DELAY);
+                delay(WIFI_RETRY_DELAY);
+            }
+        }
+
+        if (!wifiConnected) {
+            Utils_Logger::error("[OTA] [%lu] WiFi连接失败! 已尝试%d次，无法建立稳定连接",
+                               millis(), totalAttemptCount);
+            Utils_Logger::error("[OTA] [%lu] 尝试的SSID顺序: %s -> %s",
+                               millis(), ssidList[0], ssidList[1]);
+
+            Utils_Logger::info("[OTA] 正在释放WiFi资源...");
+            wifi_config_autoreconnect(0, 0, 0);
+            WiFi.disconnect();
+            delay(500);
+
+            otaInProgress = false;
+            inOtaProgress = false;
+            otaExitDialogShown = false;
+
+            tftManager.fillScreen(ST7789_RED);
+            delay(2000);
+            menuContext.showMenu();
+            return;
+        }
+    } else {
+        Utils_Logger::info("[OTA] WiFi已连接");
+    }
+
+    IPAddress ip = WiFi.localIP();
+    char ipBuf[16];
+    sprintf(ipBuf, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+    tftManager.setTextColor(ST7789_GREEN, ST7789_BLACK);
+    tftManager.setCursor(140, 130);
+    tftManager.print(ipBuf);
+    Utils_Logger::info("[OTA] 设备IP地址: %s", ipBuf);
+
+    ota.start_OTA_threads(otaPort, server);
+
+    inOtaProgress = true;
+
+    Utils_Logger::info("[OTA] 线程已启动，等待OTA服务器连接...");
+    Utils_Logger::info("[OTA] 按压键可呼出退出确认对话框");
 }
 
 static void formatDate(const char* srcDate, char* dstBuf) {

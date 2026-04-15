@@ -584,8 +584,8 @@ void WiFiFileServerModule::shutdownWiFi() {
     m_server.stop();
     delay(50);
     WiFi.disconnect();
-    delay(100);
-    Utils_Logger::info("[WiFiFileServer] WiFi shutdown complete");
+    delay(200);
+    Utils_Logger::info("[WiFiFileServer] WiFi shutdown complete (switched to STA mode)");
 }
 
 void WiFiFileServerModule::handleClientRequest() {
