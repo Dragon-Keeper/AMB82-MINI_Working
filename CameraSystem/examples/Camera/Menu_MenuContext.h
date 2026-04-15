@@ -18,6 +18,7 @@
 #include "RTOS_TaskManager.h"
 #include "RTOS_TaskFactory.h"
 #include "OTA.h"
+#include "WiFi_WiFiConnector.h"
 
 // 前向声明
 class CameraManager;
@@ -83,6 +84,11 @@ private:
     OtaIpConfigState otaIpState = OTA_IP_STATE_IDLE; // IP配置状态机当前状态
     uint8_t otaServerIp[4] = {192, 168, 1, 50};      // OTA服务器IP地址（4个字段，0~255）
     char otaServerIpStr[16] = "192.168.1.50";         // OTA服务器IP字符串形式（用于WiFi连接）
+
+    // BLE WiFi配网状态
+    bool inBleWifiConfig = false;       // 是否在BLE配网界面
+    bool bleWifiConfigActive = false;   // BLE配网是否正在运行
+    WiFiConnector *wifiConnector = nullptr; // WiFi连接器实例
     
     // 菜单项数量配置
     int maxMenuItems = 6; // A-F共6个选项
@@ -115,6 +121,13 @@ public:
     void handleOtaIpButton();                                  // 处理IP配置中的按钮事件
     bool isInOtaIpConfig() const { return otaIpState != OTA_IP_STATE_IDLE && otaIpState != OTA_IP_STATE_SUBMITTED; }
     void commitOtaServerIp();                                  // 提交IP地址，更新字符串形式
+
+    // BLE WiFi配网
+    void executeBleWifiConfig();                               // 执行BLE配网流程
+    void showBleWifiConfigScreen(const char* statusMsg);       // 显示BLE配网界面
+    void updateBleWifiConfigDisplay();                         // 更新BLE配网显示
+    void stopBleWifiConfig();                                  // 停止BLE配网
+    bool isInBleWifiConfig() const { return inBleWifiConfig; } // 是否在BLE配网界面
 
     // 构造函数
     MenuContext(MenuManager &menuManager, TriangleController &triangleController)

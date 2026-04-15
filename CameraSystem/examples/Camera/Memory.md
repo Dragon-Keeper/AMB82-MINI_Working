@@ -7,6 +7,173 @@
 
 ## 开发记录
 
+### 版本 V1.38 - BLE WiFi配网功能与OTA WiFi连接策略重构 (2026-04-15)
+
+#### 问题描述
+1. **子菜单C功能替换**：将子菜单选项C从"关闭系统"改为"蓝牙配网（BLE WiFi Config）"，实现完整的WiFi连接管理功能
+2. **OTA WiFi连接策略缺陷**：原executeOTA()在启动时无条件执行WiFi.disconnect()断开当前连接，即使已连接到正确网络也会断开；且WiFi连接策略仅支持Force→Tiger两个SSID，缺少保存SSID和BLE配网回退机制
+3. **WiFi凭据持久化需求**：通过BLE配网连接的非Force/Tiger WiFi SSID需要持久保存，断电不丢失
+4. **版本号管理**：需要规范版本号递增机制，每次迭代递增0.01
+
+#### 解决要点
+1. 创建WiFiConnector模块，封装WiFi连接策略和BLE配网功能
+2. 使用FlashMemory实现WiFi凭据持久化存储（最多5组SSID/密码）
+3. 重构executeOTA()为6阶段流程，增加保存SSID和BLE配网回退
+4. 实现BLE WiFi配网子菜单功能（子菜单C）
+5. 版本号从V1.37递增到V1.38
+
+#### 实施步骤
+1. 创建 `WiFi_WiFiConnector.h` - WiFi连接器头文件，定义WiFiConnectResult枚举、WiFiConnectorState枚举、SavedAP结构体和WiFiConnector类
+2. 创建 `WiFi_WiFiConnector.cpp` - WiFi连接器实现，包含：
+   - connectWithStrategy() - 完整WiFi连接策略（Force→Tiger→保存SSID→BLE配网）
+   - startBLEConfig()/stopBLEConfig() - BLE配网启停
+   - saveAP()/loadSavedAPs()/clearSavedAPs() - WiFi凭据管理
+   - _loadFromFlash()/_saveToFlash() - FlashMemory持久化
+3. 修改 `Menu_MenuItems.h` - 添加MENU_OPERATION_BLE_WIFI_CONFIG枚举
+4. 修改 `Menu_MenuItems.cpp` - 子菜单C标签改为"BLE WiFi"，操作改为MENU_OPERATION_BLE_WIFI_CONFIG
+5. 修改 `Menu_MenuContext.h` - 添加BLE配网状态变量和方法声明
+6. 修改 `Menu_MenuContext.cpp` - 实现executeBleWifiConfig()、showBleWifiConfigScreen()、stopBleWifiConfig()，重构executeOTA()
+7. 修改 `Shared_GlobalDefines.h` - 版本号从V1.37更新到V1.38
+
+#### 技术方案
+
+**1. WiFi连接策略（WiFiConnector模块）**
+```
+连接策略优先级：
+1. 检查当前连接 → 已连接且IP正确则直接使用
+2. Force SSID → 尝试3次
+3. Tiger SSID → 尝试3次
+4. 保存的SSID → 逐个尝试3次
+5. BLE WiFi Config → 启动BLE配网，等待手机APP配置（超时120秒）
+```
+
+**2. WiFi凭据持久化（FlashMemory）**
+- 使用AmebaPro2的FlashMemory库
+- 存储地址：0xFE000（4KB扇区）
+- 魔数校验：0x57494649（"WIFI"）
+- 最多保存5组SSID/密码
+- 每组包含：SSID（33字节）、密码（64字节）、有效标志（1字节）
+
+**3. BLE WiFi配网（BLEWifiConfigService）**
+- 使用AmebaPro2 BLE库的BLEWifiConfigService
+- 广播名称：Ameba_XXXXXX（基于BT地址）
+- 服务UUID：FF01
+- 配网流程：手机APP扫描BLE设备 → 发送WiFi SSID和密码 → 设备自动连接
+
+**4. OTA WiFi连接流程（6阶段）**
+```
+阶段1: 显示"升级中"界面，设置 inOtaProgress=true
+阶段2: 检查当前WiFi连接状态
+  - 已连接且IP号段正确 → 提示已连接，跳到阶段6
+  - 已连接但IP号段不对 → 断开后进入阶段3
+阶段3: 按Force→Tiger→保存SSID→BLE配网策略连接
+阶段4: 每次连接后验证IP第3段是否与服务器IP匹配
+阶段5: 连接失败处理
+  → wifi_config_autoreconnect(0,0,0) 禁用自动重连
+  → WiFi.disconnect() 释放资源
+  → 重置所有OTA标志 → 红屏2秒 → 返回子菜单
+阶段6: 连接成功: 显示设备IP → 调用 ota.start_OTA_threads()
+```
+
+**5. BLE配网子菜单功能（子菜单C）**
+```
+工作流程：
+1. 检查当前WiFi连接 → 已连接且IP正确 → 显示"WiFi Connected!"和IP/SSID
+2. 已连接但IP号段不对 → 断开重连
+3. 未连接 → Force→Tiger→保存SSID→BLE配网
+4. BLE配网期间显示倒计时和状态
+5. 按压按钮可取消BLE配网
+6. 成功连接后显示IP和SSID，3秒后返回子菜单
+7. 非Force/Tiger的SSID自动保存到Flash
+```
+
+#### 核心代码变更
+
+**1. WiFi_WiFiConnector.h - 新建**
+```cpp
+#define WIFI_CONN_MAX_SAVED_AP      5
+#define WIFI_CONN_SSID_MAX_LEN      33
+#define WIFI_CONN_PASS_MAX_LEN      64
+
+typedef struct {
+    char ssid[WIFI_CONN_SSID_MAX_LEN];
+    char password[WIFI_CONN_PASS_MAX_LEN];
+    bool valid;
+} SavedAP;
+
+class WiFiConnector {
+public:
+    WiFiConnectResult connectWithStrategy(uint8_t targetIpSegment3);
+    WiFiConnectResult checkCurrentConnection(uint8_t targetIpSegment3);
+    bool startBLEConfig();
+    void stopBLEConfig();
+    void saveAP(const char* ssid, const char* password);
+    void loadSavedAPs();
+    SavedAP& getSavedAP(int index);
+    // ...
+};
+```
+
+**2. Menu_MenuItems.cpp - 子菜单C修改**
+```cpp
+// 修改前:
+{.label = "关闭系统", .type = MENU_ITEM_TYPE_NONE, .operation = MENU_OPERATION_NONE, .dataIndex = 2}
+
+// 修改后:
+{.label = "BLE WiFi", .type = MENU_ITEM_TYPE_FUNCTION, .operation = MENU_OPERATION_BLE_WIFI_CONFIG, .dataIndex = 2}
+```
+
+**3. Menu_MenuContext.cpp - executeOTA()重构**
+```cpp
+// 修改前: 无条件WiFi.disconnect()后尝试Force→Tiger
+// 修改后: 先检查当前连接 → Force→Tiger→保存SSID→BLE配网
+void MenuContext::executeOTA() {
+    // 阶段1: 显示升级界面
+    // 阶段2: 检查当前WiFi连接
+    if (WiFi.status() == WL_CONNECTED) {
+        if (currentIp[2] == otaServerIp[2]) needConnect = false;
+        else { WiFi.disconnect(); }
+    }
+    // 阶段3: 按策略连接
+    // 阶段4: 验证IP第3段
+    // 阶段5: 连接失败处理
+    // 阶段6: 连接成功
+}
+```
+
+#### 文件变更
+- 新建 `WiFi_WiFiConnector.h`: WiFi连接器头文件
+- 新建 `WiFi_WiFiConnector.cpp`: WiFi连接器实现（含BLE配网和Flash持久化）
+- 修改 `Menu_MenuItems.h`: 添加MENU_OPERATION_BLE_WIFI_CONFIG枚举
+- 修改 `Menu_MenuItems.cpp`: 子菜单C标签和操作修改
+- 修改 `Menu_MenuContext.h`: 添加BLE配网状态变量和方法声明，添加WiFiConnector指针
+- 修改 `Menu_MenuContext.cpp`: 实现executeBleWifiConfig()、showBleWifiConfigScreen()、stopBleWifiConfig()，重构executeOTA()
+- 修改 `Shared_GlobalDefines.h`: 版本号从V1.37更新到V1.38
+
+#### 验证结果（待验证）
+- [ ] 编译通过
+- [ ] 子菜单C显示"BLE WiFi"标签
+- [ ] 子菜单C按下后进入BLE配网界面
+- [ ] 已连接WiFi时显示连接状态
+- [ ] Force→Tiger→保存SSID→BLE配网策略正常工作
+- [ ] BLE配网可通过手机APP配置WiFi
+- [ ] WiFi凭据断电后仍可从Flash恢复
+- [ ] OTA升级WiFi连接按6阶段流程执行
+- [ ] 串口监视器输出"当前版本: V1.38"
+
+#### Bug修复记录
+- **V1.38.1 (2026-04-15)**: 修复Menu_MenuContext.cpp中两处tftManager.print()类型错误
+  - 第1171行: `tftManager.print(retry + 1)` → 使用sprintf转换为字符串
+  - 第1707行: `tftManager.print(otaServerIp[2])` → 使用sprintf转换为字符串
+  - 原因: Display_TFTManager::print()只接受const char*参数，不支持直接打印数字
+
+- **V1.38.2 (2026-04-15)**: 修复WiFi_WiFiConnector.cpp中BLE API错误
+  - 第335行: `if (!BLE.init())` → 移除条件判断，BLE.init()返回void
+  - 第365行: `BLE.endPeripheral()` → 改为`BLE.end()`
+  - 原因: BLEDevice::init()返回void不支持逻辑非操作；BLEDevice无endPeripheral()方法
+
+---
+
 ### 版本 V1.37 - OTA POST请求格式修复：解决服务器无法识别开发板问题 (2026-04-13)
 
 #### 问题描述

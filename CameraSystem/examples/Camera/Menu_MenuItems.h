@@ -44,7 +44,8 @@ typedef enum {
     MENU_OPERATION_TIME_SYNC,       // 校对时间
     MENU_OPERATION_SHUTDOWN,        // 关闭系统
     MENU_OPERATION_OTA,            // 系统升级
-    MENU_OPERATION_VERSION         // 版本信息
+    MENU_OPERATION_VERSION,        // 版本信息
+    MENU_OPERATION_BLE_WIFI_CONFIG // 蓝牙配网
 } MenuOperation;
 
 // 菜单项结构

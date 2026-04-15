@@ -61,9 +61,9 @@ static const MenuItem subMenuItems[] = {
         .dataIndex = 1
     },
     {
-        .label = "关闭系统",
-        .type = MENU_ITEM_TYPE_NONE,
-        .operation = MENU_OPERATION_NONE,
+        .label = "BLE WiFi",
+        .type = MENU_ITEM_TYPE_FUNCTION,
+        .operation = MENU_OPERATION_BLE_WIFI_CONFIG,
         .dataIndex = 2
     },
     {

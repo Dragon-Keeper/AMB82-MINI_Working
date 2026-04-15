@@ -7,16 +7,16 @@
 #ifndef _IMAGE_CONFIG_H_
 #define _IMAGE_CONFIG_H_
 
-// MM图像配置 (MM.png)
-#define MM_IMAGE_DATA MM_PIC
-#define MM_IMAGE_SIZE sizeof(MM_PIC)
-#define MM_IMAGE_WIDTH MM_WIDTH
-#define MM_IMAGE_HEIGHT MM_HEIGHT
+// Menu_MM图像配置 (Menu_MM.png)
+#define MENU_MM_IMAGE_DATA MENU_MM_PIC
+#define MENU_MM_IMAGE_SIZE sizeof(MENU_MM_PIC)
+#define MENU_MM_IMAGE_WIDTH MENU_MM_WIDTH
+#define MENU_MM_IMAGE_HEIGHT MENU_MM_HEIGHT
 
-// SM图像配置 (SM.png)
-#define SM_IMAGE_DATA SM_PIC
-#define SM_IMAGE_SIZE sizeof(SM_PIC)
-#define SM_IMAGE_WIDTH SM_WIDTH
-#define SM_IMAGE_HEIGHT SM_HEIGHT
+// Menu_SM图像配置 (Menu_SM.png)
+#define MENU_SM_IMAGE_DATA MENU_SM_PIC
+#define MENU_SM_IMAGE_SIZE sizeof(MENU_SM_PIC)
+#define MENU_SM_IMAGE_WIDTH MENU_SM_WIDTH
+#define MENU_SM_IMAGE_HEIGHT MENU_SM_HEIGHT
 
 #endif // _IMAGE_CONFIG_H_

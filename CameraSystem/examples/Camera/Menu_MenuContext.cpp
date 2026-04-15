@@ -86,6 +86,10 @@ void handleEncoderRotation(RotationDirection direction) {
                 if (menuContext.isInOtaProgress()) {
                     break;
                 }
+                // 如果在BLE WiFi配网界面中，忽略旋转事件
+                if (menuContext.isInBleWifiConfig()) {
+                    break;
+                }
                 // 菜单模式：使用MenuContext处理旋转事件
                 if (direction == ROTATION_CW) {
                     menuContext.handleEvent(MENU_EVENT_DOWN);
@@ -334,6 +338,10 @@ bool MenuContext::handleEvent(MenuEventType event) {
                             Utils_Logger::info("[MenuContext] 关闭系统功能暂未开放");
                             break;
 
+                        case MENU_OPERATION_BLE_WIFI_CONFIG:
+                            Utils_Logger::info("[MenuContext] BLE WiFi配网");
+                            break;
+
                         case MENU_OPERATION_OTA:
                             Utils_Logger::info("[MenuContext] 系统升级功能暂未开放");
                             break;
@@ -516,6 +524,16 @@ void MenuContext::handleSubMenu() {
         }
         return;
     }
+
+    // 如果在BLE WiFi配网界面中，处理按钮事件
+    if (inBleWifiConfig) {
+        if (StateManager::getInstance().isButtonPressDetected()) {
+            StateManager::getInstance().setButtonPressDetected(false);
+            Utils_Logger::info("[BLE_WIFI] 检测到按钮按下，停止BLE配网");
+            stopBleWifiConfig();
+        }
+        return;
+    }
     
     // 处理按钮事件（只在F位置返回主菜单）
     if (StateManager::getInstance().isButtonPressDetected()) {
@@ -549,7 +567,8 @@ void MenuContext::handleSubMenu() {
                 Utils_Logger::error("校对时间任务启动失败");
             }
         } else if (getCurrentMenuItem() == POS_C) {
-            Utils_Logger::info("子菜单C位置：功能暂未开放");
+            Utils_Logger::info("子菜单C位置：启动BLE WiFi配网");
+            executeBleWifiConfig();
         } else if (getCurrentMenuItem() == POS_D) {
             // D位置按下：显示OTA确认对话框
             Utils_Logger::info("子菜单D位置：显示OTA确认对话框");
@@ -1083,6 +1102,7 @@ void MenuContext::executeOTA() {
     otaConfirmDefaultBack = true;
     otaConfirmPosD = -1;
 
+    // 阶段1: 显示"升级中"界面，设置 inOtaProgress=true
     tftManager.fillScreen(ST7789_BLACK);
 
     int16_t otaX = fontRenderer.calculateCenterPosition(320, strOtaProgress);
@@ -1110,125 +1130,196 @@ void MenuContext::executeOTA() {
 
     inOtaProgress = true;
 
-    WiFi.disconnect();
-    delay(500);
+    // 阶段2: 检查当前WiFi连接状态
+    bool needConnect = true;
 
-    if (WiFi.status() != WL_CONNECTED) {
-        Utils_Logger::info("[OTA] WiFi未连接，尝试连接网络...");
+    if (WiFi.status() == WL_CONNECTED) {
+        IPAddress currentIp = WiFi.localIP();
+        if (currentIp[2] == otaServerIp[2]) {
+            // 已连接且IP号段正确 → 提示已连接
+            Utils_Logger::info("[OTA] WiFi已连接且IP号段正确: %d.%d.%d.%d",
+                              currentIp[0], currentIp[1], currentIp[2], currentIp[3]);
+            needConnect = false;
+        } else {
+            // 连接了但IP号段不对 → 断开后按策略重连
+            Utils_Logger::info("[OTA] WiFi已连接但IP号段不对: %d != %d, 断开重连",
+                              currentIp[2], otaServerIp[2]);
+            wifi_config_autoreconnect(0, 0, 0);
+            WiFi.disconnect();
+            delay(500);
+        }
+    }
+
+    // 阶段3: 如果未连接 → 按Force→Tiger→读取保存的SSID→BLE配网策略连接
+    if (needConnect) {
+        Utils_Logger::info("[OTA] WiFi未连接，按策略连接...");
 
         bool wifiConnected = false;
-        const int WIFI_RETRY_DELAY = 3000;
-        const int SAME_SSID_MAX_RETRIES = 3;
-        const int MAX_SSID_SWITCHES = 1;
+        const char* knownSSIDs[] = {"Force", "Tiger"};
+        const char* knownPasswords[] = {"dd123456", "Dt5201314"};
 
-        const char* ssidList[2] = {"Force", "Tiger"};
-        const char* passwordList[2] = {"dd123456", "Dt5201314"};
-        int currentSsidIndex = 0;
-        int sameSsidRetryCount = 0;
-        int ssidSwitchCount = 0;
-        int totalAttemptCount = 0;
+        // 步骤1: 尝试Force和Tiger
+        for (int i = 0; i < 2; i++) {
+            for (int retry = 0; retry < 3; retry++) {
+                Utils_Logger::info("[OTA] 尝试连接 %s (%d/3)", knownSSIDs[i], retry + 1);
 
-        while (!wifiConnected) {
-            totalAttemptCount++;
-            const char* currentSsid = ssidList[currentSsidIndex];
-            const char* currentPassword = passwordList[currentSsidIndex];
+                tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+                tftManager.setCursor(50, 210);
+                tftManager.print("Connecting ");
+                tftManager.print(knownSSIDs[i]);
+                tftManager.print("  ");
+                char retryStr[8];
+                sprintf(retryStr, "%d", retry + 1);
+                tftManager.print(retryStr);
+                tftManager.print("/3");
 
-            Utils_Logger::info("[OTA] [%lu] 连接尝试 #%d - SSID[%d]: %s (当前SSID尝试次数: %d/%d)",
-                              millis(), totalAttemptCount, currentSsidIndex, currentSsid,
-                              sameSsidRetryCount + 1, SAME_SSID_MAX_RETRIES);
+                char ssidBuf[33], passBuf[65];
+                strncpy(ssidBuf, knownSSIDs[i], 32);
+                strncpy(passBuf, knownPasswords[i], 64);
+                ssidBuf[32] = '\0';
+                passBuf[64] = '\0';
 
-            char ssidBuffer[32];
-            char passwordBuffer[32];
-            strncpy(ssidBuffer, currentSsid, sizeof(ssidBuffer) - 1);
-            strncpy(passwordBuffer, currentPassword, sizeof(passwordBuffer) - 1);
-            ssidBuffer[sizeof(ssidBuffer) - 1] = '\0';
-            passwordBuffer[sizeof(passwordBuffer) - 1] = '\0';
+                WiFi.begin(ssidBuf, passBuf);
 
-            WiFi.begin(ssidBuffer, passwordBuffer);
-
-            int connectRetry = 0;
-            const int MAX_CONNECT_RETRIES = 10;
-
-            while (connectRetry < MAX_CONNECT_RETRIES && WiFi.status() != WL_CONNECTED) {
-                delay(500);
-                connectRetry++;
-            }
-
-            if (WiFi.status() == WL_CONNECTED) {
-                IPAddress obtainedIP = WiFi.localIP();
-                Utils_Logger::info("[OTA] [%lu] WiFi连接成功 - SSID: %s, IP: %d.%d.%d.%d",
-                                  millis(), ssidBuffer, obtainedIP[0], obtainedIP[1], obtainedIP[2], obtainedIP[3]);
-
-                if (obtainedIP[2] != otaServerIp[2]) {
-                    Utils_Logger::info("[OTA] [%lu] IP网段异常! 设备第3段=%d, 服务器第3段=%d",
-                                      millis(), obtainedIP[2], otaServerIp[2]);
-                    Utils_Logger::info("[OTA] [%lu] SSID[%d]=%s 重连尝试 %d/%d",
-                                      millis(), currentSsidIndex, currentSsid, sameSsidRetryCount + 1, SAME_SSID_MAX_RETRIES);
-
-                    WiFi.disconnect();
-                    delay(1000);
-                    sameSsidRetryCount++;
-
-                    if (sameSsidRetryCount >= SAME_SSID_MAX_RETRIES) {
-                        if (ssidSwitchCount < MAX_SSID_SWITCHES) {
-                            Utils_Logger::info("[OTA] [%lu] SSID[%d]=%s 已重连%d次仍异常，尝试切换SSID",
-                                              millis(), currentSsidIndex, currentSsid, SAME_SSID_MAX_RETRIES);
-                            sameSsidRetryCount = 0;
-                            currentSsidIndex = (currentSsidIndex == 0) ? 1 : 0;
-                            ssidSwitchCount++;
-                            const char* nextSsid = ssidList[currentSsidIndex];
-                            Utils_Logger::info("[OTA] [%lu] 切换到备选SSID[%d]: %s", millis(), currentSsidIndex, nextSsid);
-                        } else {
-                            Utils_Logger::info("[OTA] [%lu] 已切换SSID%d次，无更多备选SSID",
-                                              millis(), ssidSwitchCount);
-                            break;
-                        }
-                    }
-                    continue;
+                int connectRetry = 0;
+                while (connectRetry < 10 && WiFi.status() != WL_CONNECTED) {
+                    delay(500);
+                    connectRetry++;
                 }
 
-                wifiConnected = true;
-                sameSsidRetryCount = 0;
-                Utils_Logger::info("[OTA] [%lu] WiFi连接验证通过! 最终SSID: %s, IP: %d.%d.%d.%d",
-                                  millis(), ssidBuffer, obtainedIP[0], obtainedIP[1], obtainedIP[2], obtainedIP[3]);
-                break;
-            } else {
-                Utils_Logger::error("[OTA] [%lu] WiFi连接失败 - SSID: %s, 状态: %d",
-                                   millis(), ssidBuffer, WiFi.status());
-                WiFi.disconnect();
-                delay(1000);
-
-                sameSsidRetryCount++;
-                if (sameSsidRetryCount >= SAME_SSID_MAX_RETRIES) {
-                    if (ssidSwitchCount < MAX_SSID_SWITCHES) {
-                        Utils_Logger::info("[OTA] [%lu] SSID[%d]=%s 连接失败%d次，尝试切换SSID",
-                                          millis(), currentSsidIndex, currentSsid, SAME_SSID_MAX_RETRIES);
-                        sameSsidRetryCount = 0;
-                        currentSsidIndex = (currentSsidIndex == 0) ? 1 : 0;
-                        ssidSwitchCount++;
-                        Utils_Logger::info("[OTA] [%lu] 切换到备选SSID[%d]: %s", millis(), currentSsidIndex, ssidList[currentSsidIndex]);
-                    } else {
-                        Utils_Logger::info("[OTA] [%lu] 已切换SSID%d次，无更多备选SSID",
-                                          millis(), ssidSwitchCount);
+                // 阶段4: 每次连接后验证IP第3段是否与服务器IP匹配
+                if (WiFi.status() == WL_CONNECTED) {
+                    IPAddress ip = WiFi.localIP();
+                    if (ip[2] == otaServerIp[2]) {
+                        wifiConnected = true;
                         break;
+                    } else {
+                        Utils_Logger::info("[OTA] IP号段不匹配: %d != %d", ip[2], otaServerIp[2]);
+                        wifi_config_autoreconnect(0, 0, 0);
+                        WiFi.disconnect();
+                        delay(500);
                     }
+                } else {
+                    wifi_config_autoreconnect(0, 0, 0);
+                    WiFi.disconnect();
+                    delay(500);
                 }
             }
+            if (wifiConnected) break;
+        }
 
-            if (!wifiConnected) {
-                Utils_Logger::info("[OTA] [%lu] 等待%dms后进行下一次连接尝试...",
-                                  millis(), WIFI_RETRY_DELAY);
-                delay(WIFI_RETRY_DELAY);
+        // 步骤2: 尝试保存的SSID
+        if (!wifiConnected) {
+            if (wifiConnector == nullptr) {
+                wifiConnector = new WiFiConnector();
+            }
+            wifiConnector->loadSavedAPs();
+
+            for (int i = 0; i < WIFI_CONN_MAX_SAVED_AP; i++) {
+                if (!wifiConnector->getSavedAP(i).valid) continue;
+
+                bool isKnown = (strcmp(wifiConnector->getSavedAP(i).ssid, "Force") == 0 ||
+                               strcmp(wifiConnector->getSavedAP(i).ssid, "Tiger") == 0);
+                if (isKnown) continue;
+
+                Utils_Logger::info("[OTA] 尝试保存的SSID: %s", wifiConnector->getSavedAP(i).ssid);
+
+                tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+                tftManager.setCursor(50, 210);
+                tftManager.print("Saved: ");
+                tftManager.print(wifiConnector->getSavedAP(i).ssid);
+                tftManager.print("   ");
+
+                for (int retry = 0; retry < 3; retry++) {
+                    WiFi.begin(wifiConnector->getSavedAP(i).ssid, wifiConnector->getSavedAP(i).password);
+
+                    int connectRetry = 0;
+                    while (connectRetry < 10 && WiFi.status() != WL_CONNECTED) {
+                        delay(500);
+                        connectRetry++;
+                    }
+
+                    if (WiFi.status() == WL_CONNECTED) {
+                        IPAddress ip = WiFi.localIP();
+                        if (ip[2] == otaServerIp[2]) {
+                            wifiConnected = true;
+                            break;
+                        } else {
+                            wifi_config_autoreconnect(0, 0, 0);
+                            WiFi.disconnect();
+                            delay(500);
+                        }
+                    } else {
+                        wifi_config_autoreconnect(0, 0, 0);
+                        WiFi.disconnect();
+                        delay(500);
+                    }
+                }
+                if (wifiConnected) break;
             }
         }
 
+        // 步骤3: 转跳BLE配网子模块
         if (!wifiConnected) {
-            Utils_Logger::error("[OTA] [%lu] WiFi连接失败! 已尝试%d次，无法建立稳定连接",
-                               millis(), totalAttemptCount);
-            Utils_Logger::error("[OTA] [%lu] 尝试的SSID顺序: %s -> %s",
-                               millis(), ssidList[0], ssidList[1]);
+            Utils_Logger::info("[OTA] 所有已知SSID失败，启动BLE WiFi配网...");
 
-            Utils_Logger::info("[OTA] 正在释放WiFi资源...");
+            tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+            tftManager.setCursor(50, 210);
+            tftManager.print("BLE WiFi Config...   ");
+
+            if (wifiConnector == nullptr) {
+                wifiConnector = new WiFiConnector();
+            }
+
+            if (!wifiConnector->startBLEConfig()) {
+                Utils_Logger::error("[OTA] BLE配网启动失败");
+            } else {
+                unsigned long bleStartTime = millis();
+                const unsigned long bleTimeout = 120000;
+
+                while (!wifiConnected && (millis() - bleStartTime < bleTimeout)) {
+                    if (WiFi.status() == WL_CONNECTED) {
+                        IPAddress ip = WiFi.localIP();
+                        wifiConnector->stopBLEConfig();
+
+                        if (ip[2] == otaServerIp[2]) {
+                            wifiConnected = true;
+
+                            String ssidStr = WiFi.SSID();
+                            bool isKnownSSID = (ssidStr == "Force" || ssidStr == "Tiger");
+                            if (!isKnownSSID) {
+                                Utils_Logger::info("[OTA] 保存新SSID: %s", ssidStr.c_str());
+                                wifiConnector->saveAP(ssidStr.c_str(), "");
+                            }
+                        } else {
+                            Utils_Logger::info("[OTA] BLE配网连接但IP号段不对");
+                            wifi_config_autoreconnect(0, 0, 0);
+                            WiFi.disconnect();
+                            delay(500);
+                            break;
+                        }
+                    }
+
+                    if (StateManager::getInstance().isButtonPressDetected()) {
+                        StateManager::getInstance().setButtonPressDetected(false);
+                        Utils_Logger::info("[OTA] 用户取消BLE配网");
+                        wifiConnector->stopBLEConfig();
+                        break;
+                    }
+
+                    delay(500);
+                }
+
+                if (!wifiConnected && wifiConnector->isBLEConfigRunning()) {
+                    wifiConnector->stopBLEConfig();
+                }
+            }
+        }
+
+        // 阶段5: 连接失败处理
+        if (!wifiConnected) {
+            Utils_Logger::error("[OTA] WiFi连接失败!");
+
             wifi_config_autoreconnect(0, 0, 0);
             WiFi.disconnect();
             delay(500);
@@ -1242,10 +1333,9 @@ void MenuContext::executeOTA() {
             menuContext.showMenu();
             return;
         }
-    } else {
-        Utils_Logger::info("[OTA] WiFi已连接");
     }
 
+    // 阶段6: 连接成功 - 显示设备IP → 调用 ota.start_OTA_threads()
     IPAddress ip = WiFi.localIP();
     char ipBuf[16];
     sprintf(ipBuf, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
@@ -1331,4 +1421,330 @@ void MenuContext::showVersionInfo() {
     delay(4000);
 
     showMenu();
+}
+
+void MenuContext::executeBleWifiConfig()
+{
+    if (inBleWifiConfig) {
+        Utils_Logger::info("[BLE_WIFI] BLE配网已在运行中");
+        return;
+    }
+
+    inBleWifiConfig = true;
+    bleWifiConfigActive = true;
+
+    if (wifiConnector == nullptr) {
+        wifiConnector = new WiFiConnector();
+    }
+
+    WiFiConnectResult checkResult = wifiConnector->checkCurrentConnection(otaServerIp[2]);
+
+    if (checkResult == WIFI_CONN_ALREADY_CONNECTED) {
+        IPAddress ip = WiFi.localIP();
+        char ipBuf[16];
+        sprintf(ipBuf, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+        showBleWifiConfigScreen("WiFi Connected!");
+        tftManager.setTextColor(ST7789_GREEN, ST7789_BLACK);
+        tftManager.setCursor(50, 150);
+        tftManager.print("IP: ");
+        tftManager.print(ipBuf);
+        tftManager.setCursor(50, 170);
+        tftManager.print("SSID: ");
+        tftManager.print(WiFi.SSID());
+        delay(3000);
+        inBleWifiConfig = false;
+        bleWifiConfigActive = false;
+        showMenu();
+        return;
+    }
+
+    if (checkResult == WIFI_CONN_WRONG_IP_SEGMENT) {
+        showBleWifiConfigScreen("Wrong IP, reconnect...");
+        wifi_config_autoreconnect(0, 0, 0);
+        WiFi.disconnect();
+        delay(500);
+    }
+
+    showBleWifiConfigScreen("Connecting Force...");
+
+    const char* knownSSIDs[] = {"Force", "Tiger"};
+    const char* knownPasswords[] = {"dd123456", "Dt5201314"};
+
+    for (int i = 0; i < 2; i++) {
+        for (int retry = 0; retry < 3; retry++) {
+            if (!bleWifiConfigActive) {
+                inBleWifiConfig = false;
+                showMenu();
+                return;
+            }
+
+            char statusMsg[32];
+            sprintf(statusMsg, "Connecting %s %d/3", knownSSIDs[i], retry + 1);
+            showBleWifiConfigScreen(statusMsg);
+
+            char ssidBuf[33];
+            char passBuf[65];
+            strncpy(ssidBuf, knownSSIDs[i], 32);
+            strncpy(passBuf, knownPasswords[i], 64);
+            ssidBuf[32] = '\0';
+            passBuf[64] = '\0';
+
+            WiFi.begin(ssidBuf, passBuf);
+
+            int connectRetry = 0;
+            while (connectRetry < 10 && WiFi.status() != WL_CONNECTED) {
+                if (!bleWifiConfigActive) {
+                    inBleWifiConfig = false;
+                    showMenu();
+                    return;
+                }
+                delay(500);
+                connectRetry++;
+            }
+
+            if (WiFi.status() == WL_CONNECTED) {
+                IPAddress ip = WiFi.localIP();
+                if (ip[2] == otaServerIp[2]) {
+                    char ipBuf[16];
+                    sprintf(ipBuf, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+                    showBleWifiConfigScreen("WiFi Connected!");
+                    tftManager.setTextColor(ST7789_GREEN, ST7789_BLACK);
+                    tftManager.setCursor(50, 150);
+                    tftManager.print("IP: ");
+                    tftManager.print(ipBuf);
+                    tftManager.setCursor(50, 170);
+                    tftManager.print("SSID: ");
+                    tftManager.print(knownSSIDs[i]);
+                    delay(3000);
+                    inBleWifiConfig = false;
+                    bleWifiConfigActive = false;
+                    showMenu();
+                    return;
+                }
+                Utils_Logger::info("[BLE_WIFI] IP segment mismatch, disconnect");
+                wifi_config_autoreconnect(0, 0, 0);
+                WiFi.disconnect();
+                delay(500);
+            } else {
+                wifi_config_autoreconnect(0, 0, 0);
+                WiFi.disconnect();
+                delay(500);
+            }
+        }
+    }
+
+    showBleWifiConfigScreen("Trying saved SSIDs...");
+    wifiConnector->loadSavedAPs();
+
+    for (int i = 0; i < WIFI_CONN_MAX_SAVED_AP; i++) {
+        if (!bleWifiConfigActive) {
+            inBleWifiConfig = false;
+            showMenu();
+            return;
+        }
+
+        if (!wifiConnector->getSavedAP(i).valid) continue;
+
+        bool isKnown = (strcmp(wifiConnector->getSavedAP(i).ssid, "Force") == 0 ||
+                       strcmp(wifiConnector->getSavedAP(i).ssid, "Tiger") == 0);
+        if (isKnown) continue;
+
+        char statusMsg[48];
+        sprintf(statusMsg, "Saved: %s", wifiConnector->getSavedAP(i).ssid);
+        showBleWifiConfigScreen(statusMsg);
+
+        for (int retry = 0; retry < 3; retry++) {
+            if (!bleWifiConfigActive) {
+                inBleWifiConfig = false;
+                showMenu();
+                return;
+            }
+
+            WiFi.begin(wifiConnector->getSavedAP(i).ssid, wifiConnector->getSavedAP(i).password);
+
+            int connectRetry = 0;
+            while (connectRetry < 10 && WiFi.status() != WL_CONNECTED) {
+                if (!bleWifiConfigActive) {
+                    inBleWifiConfig = false;
+                    showMenu();
+                    return;
+                }
+                delay(500);
+                connectRetry++;
+            }
+
+            if (WiFi.status() == WL_CONNECTED) {
+                IPAddress ip = WiFi.localIP();
+                if (ip[2] == otaServerIp[2]) {
+                    char ipBuf[16];
+                    sprintf(ipBuf, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+                    showBleWifiConfigScreen("WiFi Connected!");
+                    tftManager.setTextColor(ST7789_GREEN, ST7789_BLACK);
+                    tftManager.setCursor(50, 150);
+                    tftManager.print("IP: ");
+                    tftManager.print(ipBuf);
+                    tftManager.setCursor(50, 170);
+                    tftManager.print("SSID: ");
+                    tftManager.print(wifiConnector->getSavedAP(i).ssid);
+                    delay(3000);
+                    inBleWifiConfig = false;
+                    bleWifiConfigActive = false;
+                    showMenu();
+                    return;
+                }
+                wifi_config_autoreconnect(0, 0, 0);
+                WiFi.disconnect();
+                delay(500);
+            } else {
+                wifi_config_autoreconnect(0, 0, 0);
+                WiFi.disconnect();
+                delay(500);
+            }
+        }
+    }
+
+    showBleWifiConfigScreen("BLE Config...");
+
+    if (!wifiConnector->startBLEConfig()) {
+        showBleWifiConfigScreen("BLE Start Failed!");
+        delay(2000);
+        inBleWifiConfig = false;
+        bleWifiConfigActive = false;
+        showMenu();
+        return;
+    }
+
+    unsigned long bleStartTime = millis();
+    const unsigned long bleTimeout = 120000;
+
+    while (bleWifiConfigActive && (millis() - bleStartTime < bleTimeout)) {
+        if (WiFi.status() == WL_CONNECTED) {
+            IPAddress ip = WiFi.localIP();
+            char ipBuf[16];
+            sprintf(ipBuf, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+
+            wifiConnector->stopBLEConfig();
+
+            if (ip[2] == otaServerIp[2]) {
+                String ssidStr = WiFi.SSID();
+                bool isKnownSSID = (ssidStr == "Force" || ssidStr == "Tiger");
+
+                if (!isKnownSSID) {
+                    Utils_Logger::info("[BLE_WIFI] Saving new SSID: %s", ssidStr.c_str());
+                    wifiConnector->saveAP(ssidStr.c_str(), "");
+                }
+
+                showBleWifiConfigScreen("WiFi Connected!");
+                tftManager.setTextColor(ST7789_GREEN, ST7789_BLACK);
+                tftManager.setCursor(50, 150);
+                tftManager.print("IP: ");
+                tftManager.print(ipBuf);
+                tftManager.setCursor(50, 170);
+                tftManager.print("SSID: ");
+                tftManager.print(ssidStr.c_str());
+                delay(3000);
+                inBleWifiConfig = false;
+                bleWifiConfigActive = false;
+                showMenu();
+                return;
+            } else {
+                showBleWifiConfigScreen("Wrong IP segment!");
+                tftManager.setTextColor(ST7789_RED, ST7789_BLACK);
+                tftManager.setCursor(50, 150);
+                tftManager.print("IP: ");
+                tftManager.print(ipBuf);
+                delay(3000);
+                wifi_config_autoreconnect(0, 0, 0);
+                WiFi.disconnect();
+                delay(500);
+                inBleWifiConfig = false;
+                bleWifiConfigActive = false;
+                showMenu();
+                return;
+            }
+        }
+
+        unsigned long elapsed = millis() - bleStartTime;
+        if (elapsed % 5000 < 500) {
+            char statusMsg[32];
+            sprintf(statusMsg, "BLE Waiting... %lus", (bleTimeout - elapsed) / 1000);
+            showBleWifiConfigScreen(statusMsg);
+        }
+
+        if (StateManager::getInstance().isButtonPressDetected()) {
+            StateManager::getInstance().setButtonPressDetected(false);
+            Utils_Logger::info("[BLE_WIFI] 用户按下按钮，停止BLE配网");
+            stopBleWifiConfig();
+            return;
+        }
+
+        delay(200);
+    }
+
+    wifiConnector->stopBLEConfig();
+
+    if (bleWifiConfigActive) {
+        showBleWifiConfigScreen("BLE Timeout!");
+        delay(2000);
+    }
+
+    inBleWifiConfig = false;
+    bleWifiConfigActive = false;
+    showMenu();
+}
+
+void MenuContext::showBleWifiConfigScreen(const char* statusMsg)
+{
+    tftManager.fillScreen(ST7789_BLACK);
+
+    tftManager.setTextColor(ST7789_CYAN, ST7789_BLACK);
+    tftManager.setTextSize(2);
+    tftManager.setCursor(60, 30);
+    tftManager.print("BLE WiFi Config");
+
+    tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+    tftManager.setTextSize(1);
+    tftManager.setCursor(50, 80);
+    tftManager.print("Target IP seg3: ");
+    char ipSegStr[8];
+    sprintf(ipSegStr, "%d", otaServerIp[2]);
+    tftManager.print(ipSegStr);
+
+    tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+    tftManager.setTextSize(1);
+    tftManager.setCursor(50, 110);
+    tftManager.print("Status: ");
+    tftManager.print(statusMsg);
+
+    tftManager.setTextColor(ST7789_GRAY, ST7789_BLACK);
+    tftManager.setCursor(50, 210);
+    tftManager.print("Press btn to cancel");
+}
+
+void MenuContext::updateBleWifiConfigDisplay()
+{
+    // Reserved for future async display updates
+}
+
+void MenuContext::stopBleWifiConfig()
+{
+    Utils_Logger::info("[BLE_WIFI] 停止BLE配网");
+
+    bleWifiConfigActive = false;
+
+    if (wifiConnector != nullptr) {
+        wifiConnector->cancel();
+        if (wifiConnector->isBLEConfigRunning()) {
+            wifiConnector->stopBLEConfig();
+        }
+    }
+
+    wifi_config_autoreconnect(0, 0, 0);
+    WiFi.disconnect();
+    delay(500);
+
+    inBleWifiConfig = false;
+
+    showMenu();
+    triangleController.moveToPosition(TriangleController::POSITION_C);
 }

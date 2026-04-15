@@ -30,8 +30,7 @@
 
 ## 系统版本
 
-
-**当前版本**：V1.35
+**当前版本**：V1.38
 
 ## 功能特点
 
@@ -326,15 +325,21 @@
 - 重启开发板
 - 系统将自动重新启动
 
-### 位置C：关闭相机
-- 相机进入深度睡眠状态
-- 释放所有相关资源
-- 系统将自动返回主菜单
+### 位置C：BLE WiFi配网
+- 通过BLE配置WiFi连接
+- 使用BLEWifiConfigService进行配网
+- 支持保存WiFi凭据到Flash（最多5组）
+- 工作流程：
+  - 已连接WiFi且IP正确 → 显示连接状态
+  - 已连接但IP不对 → 断开后重连
+  - 未连接 → Force→Tiger→保存SSID→BLE配网
+- 非Force/Tiger的SSID自动保存到Flash
+- 按压按钮可取消配网
 
 ### 位置D：系统升级
 - 升级系统固件
 - 支持在线升级
-- WiFi连接策略：Force SSID(3次) → Tiger SSID(3次) → 保存的SSID
+- WiFi连接策略：Force SSID(3次) → Tiger SSID(3次) → 保存的SSID(各3次) → BLE配网
 - IP号段验证：确保设备IP与OTA服务器IP在同一号段
 - 退出确认对话框：升级中按压按钮弹出确认窗口
   - 显示"Exit OTA"标题
@@ -345,7 +350,7 @@
 
 ### 位置E：版本信息
 - 显示系统版本信息对话框（居中于横屏屏幕）
-- **项目迭代版本**：来自 `SYSTEM_VERSION_STRING` 宏定义（如 `V1.35`）
+- **项目迭代版本**：来自 `SYSTEM_VERSION_STRING` 宏定义（如 `V1.38`）
 - **固件版本**：`v4.0.9`（Arduino SDK版本）
 - **编译日期**：自动从 `__DATE__` 格式化显示（如 `2025-04-09`）
 - **摄像头型号**：`GC2053`
@@ -432,7 +437,9 @@ Camera/
 ├── ota_drv.cpp                    # OTA驱动
 ├── ota_drv.h                      # OTA驱动头文件
 ├── WiFi_WiFiFileServer.cpp        # WiFi文件服务器
-└── WiFi_WiFiFileServer.h          # WiFi文件服务器头文件
+├── WiFi_WiFiFileServer.h          # WiFi文件服务器头文件
+├── WiFi_WiFiConnector.cpp         # WiFi连接器（含BLE配网）
+└── WiFi_WiFiConnector.h           # WiFi连接器头文件
 ```
 
 ## 编译和上传
@@ -478,6 +485,19 @@ Camera/
 - 检查ENCODER_CLK、ENCODER_DT、ENCODER_SW引脚配置
 
 ## 版本历史
+
+### V1.38 (2026-04-15)
+- **BLE WiFi配网功能**：
+  - 新增子菜单C：BLE WiFi配网功能
+  - 使用BLEWifiConfigService进行配网
+  - WiFi凭据持久化存储到Flash（最多5组）
+  - 非Force/Tiger的SSID自动保存到Flash
+- **OTA WiFi连接策略重构**：
+  - WiFi连接策略更新为：Force SSID(3次) → Tiger SSID(3次) → 保存的SSID(各3次) → BLE配网
+  - 新增当前连接检查，避免不必要的断开重连
+  - 失败时正确禁用WiFi驱动自动重连
+- **代码重构**：
+  - 创建WiFiConnector模块封装WiFi连接策略和BLE配网功能
 
 ### V1.35 (2026-04-15)
 - **OTA升级功能完善**：
