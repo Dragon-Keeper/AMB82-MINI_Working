@@ -19,6 +19,7 @@
 #include "RTOS_TaskFactory.h"
 #include "OTA.h"
 #include "WiFi_WiFiConnector.h"
+#include "USB_MassStorageModule.h"
 
 // 前向声明
 class CameraManager;
@@ -42,6 +43,7 @@ typedef enum {
 // OTA服务器IP配置状态机状态
 typedef enum {
     OTA_IP_STATE_IDLE = 0,       // 空闲，未进入IP配置
+    OTA_IP_STATE_SELECT,         // 选择确认模式或手动设置
     OTA_IP_STATE_FIELD_1,        // 正在编辑第1个字段（如192）
     OTA_IP_STATE_FIELD_2,        // 正在编辑第2个字段（如168）
     OTA_IP_STATE_FIELD_3,        // 正在编辑第3个字段（如1）
@@ -84,14 +86,32 @@ private:
     OtaIpConfigState otaIpState = OTA_IP_STATE_IDLE; // IP配置状态机当前状态
     uint8_t otaServerIp[4] = {192, 168, 1, 50};      // OTA服务器IP地址（4个字段，0~255）
     char otaServerIpStr[16] = "192.168.1.50";         // OTA服务器IP字符串形式（用于WiFi连接）
+    bool otaIpSelectDefaultConfirm = true;           // IP选择界面默认选中"确认"选项
 
     // BLE WiFi配网状态
     bool inBleWifiConfig = false;       // 是否在BLE配网界面
     bool bleWifiConfigActive = false;   // BLE配网是否正在运行
     WiFiConnector *wifiConnector = nullptr; // WiFi连接器实例
+    bool bleExitDialogShown = false;    // BLE配网退出确认对话框是否正在显示
+    bool bleExitDefaultBack = true;     // BLE退出对话框默认选中"返回"选项
     
     // 菜单项数量配置
     int maxMenuItems = 6; // A-F共6个选项
+
+    // 传输模式选择状态
+    // 选项索引: 0=USB, 1=WEB, 2=返回
+    bool inTransferModeSelect = false;
+    int transferModeSelectIndex = 0; // 当前选中的选项索引
+
+    // 时间同步窗口状态
+    bool inTimeSyncWindow = false;              // 是否在时间同步窗口界面
+    bool timeSyncButtonHandled = false;         // 防止按钮重复处理的标志
+    TimeSyncState timeSyncState = TIME_SYNC_IDLE; // 当前校对状态
+    char timeSyncStatus[64];                     // 校对状态描述
+    int timeSyncProgress = 0;                    // 校对进度百分比
+    char timeSyncServer[32];                     // 当前NTP服务器
+    unsigned long timeSyncStartTime = 0;         // 校对开始时间
+    char currentTimeStr[16];                     // 当前系统时间字符串
 
 public:
     // 确认对话框绘制（需要在回调函数中调用）
@@ -117,8 +137,12 @@ public:
     // OTA服务器IP配置
     void showOtaIpConfig();                                    // 显示IP配置界面
     void updateOtaIpDisplay();                                 // 刷新IP配置界面显示
+    void updateOtaIpSelectDisplay();                          // 刷新IP选择界面显示
     void handleOtaIpRotation(RotationDirection direction);     // 处理IP配置中的旋转事件
     void handleOtaIpButton();                                  // 处理IP配置中的按钮事件
+    void handleOtaIpSelectRotation(RotationDirection direction); // 处理IP选择中的旋转事件
+    void handleOtaIpSelectButton();                           // 处理IP选择中的按钮事件
+    bool isInOtaIpSelectState() const { return otaIpState == OTA_IP_STATE_SELECT; }
     bool isInOtaIpConfig() const { return otaIpState != OTA_IP_STATE_IDLE && otaIpState != OTA_IP_STATE_SUBMITTED; }
     void commitOtaServerIp();                                  // 提交IP地址，更新字符串形式
 
@@ -128,6 +152,29 @@ public:
     void updateBleWifiConfigDisplay();                         // 更新BLE配网显示
     void stopBleWifiConfig();                                  // 停止BLE配网
     bool isInBleWifiConfig() const { return inBleWifiConfig; } // 是否在BLE配网界面
+    void showBleExitDialog();                                  // 显示BLE配网退出确认对话框
+    void handleBleExitRotation(RotationDirection direction);   // 处理BLE退出对话框旋转
+    void handleBleExitButton();                                // 处理BLE退出对话框按钮
+    bool isBleExitDialogShown() const { return bleExitDialogShown; }
+
+    // 传输模式选择
+    void showTransferModeSelect();                          // 显示传输模式选择界面
+    void updateTransferModeSelectDisplay();                   // 更新传输模式选择显示
+    void handleTransferModeSelectRotation(RotationDirection direction); // 处理传输模式选择的旋转事件
+    void handleTransferModeSelectButton();                   // 处理传输模式选择的按钮事件
+    bool isInTransferModeSelect() const { return inTransferModeSelect; }
+
+    void returnFromUsbMode();
+    void returnFromTransferMode();
+
+    // 时间同步窗口
+    void showTimeSyncWindow();                        // 显示时间同步窗口
+    void hideTimeSyncWindow();                        // 隐藏时间同步窗口
+    void updateTimeSyncWindow();                      // 更新时间同步窗口显示
+    void setTimeSyncState(TimeSyncState state, const char* status, int progress, const char* server = "");
+    const char* getTimeSyncStateText(TimeSyncState state);
+    bool isInTimeSyncWindow() const { return inTimeSyncWindow; }
+    void resetTimeSyncButtonHandled() { timeSyncButtonHandled = false; }
 
     // 构造函数
     MenuContext(MenuManager &menuManager, TriangleController &triangleController)

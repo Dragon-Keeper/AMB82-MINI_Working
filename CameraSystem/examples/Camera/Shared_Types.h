@@ -105,4 +105,21 @@ typedef struct {
     void (*taskFunction)(void*);
 } TaskManager_t;
 
+// ===============================================
+// 时间同步状态枚举
+// ===============================================
+
+typedef enum {
+    TIME_SYNC_IDLE = 0,           // 空闲状态
+    TIME_SYNC_CONNECTING_WIFI,    // 连接WiFi中
+    TIME_SYNC_CONNECTED_WIFI,     // WiFi已连接
+    TIME_SYNC_NTP_INIT,           // NTP客户端初始化中
+    TIME_SYNC_NTP_SYNCING,        // NTP同步中
+    TIME_SYNC_NTP_SUCCESS,        // NTP同步成功
+    TIME_SYNC_NTP_FAILED,          // NTP同步失败
+    TIME_SYNC_UPDATING_DS3231,    // 校准DS3231中
+    TIME_SYNC_COMPLETE,           // 校对完成
+    TIME_SYNC_DISCONNECTING       // 断开WiFi连接中
+} TimeSyncState;
+
 #endif // TYPES_H

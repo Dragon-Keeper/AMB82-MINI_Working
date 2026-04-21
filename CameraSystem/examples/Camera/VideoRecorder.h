@@ -14,7 +14,7 @@
 #include "VideoStream.h"
 #include "AmebaFatFS.h"
 #include "Shared_GlobalDefines.h"
-#include "DS1307_ClockModule.h"
+#include "DS3231_ClockModule.h"
 #include "Camera_SDCardManager.h"
 #include "Camera_CameraManager.h"
 #include "Encoder_Control.h"

@@ -84,8 +84,8 @@ static int CameraManager_JPEGDraw(JPEGDRAW *pDraw) {
 // SD卡管理器实例（在Camera.ino中定义）
 extern SDCardManager sdCardManager;
 
-// DS1307时钟模块实例（在Camera.ino中定义）
-extern DS1307_ClockModule clockModule;
+// DS3231时钟模块实例（在Camera.ino中定义）
+extern DS3231_ClockModule clockModule;
 
 CameraManager::CameraManager()
     : m_tftManager(nullptr)
@@ -437,12 +437,12 @@ bool CameraManager::savePhotoToSDCard(uint32_t imgAddr, uint32_t imgLen) {
     char filename[50];
     m_sdCardManager->generatePhotoFileName(filename, sizeof(filename));
 
-    // 从DS1307模块获取当前时间，用于设置文件最后修改时间
-    DS1307_Time captureTime;
+    // 从DS3231模块获取当前时间，用于设置文件最后修改时间
+    DS3231_Time captureTime;
     bool timeSuccess = clockModule.readTime(captureTime);
     
     if (!timeSuccess) {
-        Utils_Logger::error("Failed to read capture time from DS1307");
+        Utils_Logger::error("Failed to read capture time from DS3231");
         // 如果读取失败，使用默认时间
         captureTime = {0, 0, 0, 1, 1, 1, 2026};
     }

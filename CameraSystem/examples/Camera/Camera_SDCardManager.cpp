@@ -7,7 +7,7 @@
 #include "Camera_SDCardManager.h"
 #include "Utils_Logger.h"
 #include "Utils_Timer.h"
-#include "DS1307_ClockModule.h"
+#include "DS3231_ClockModule.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -111,7 +111,7 @@ bool SDCardManager::renameFile(const char* oldPath, const char* newPath) {
     }
 }
 
-int32_t SDCardManager::writeFile(const char* path, const uint8_t* data, uint32_t size, const DS1307_Time* time) {
+int32_t SDCardManager::writeFile(const char* path, const uint8_t* data, uint32_t size, const DS3231_Time* time) {
     if (!m_initialized) {
         Utils_Logger::error("SDCardManager not initialized");
         return -1;
@@ -239,8 +239,8 @@ char* SDCardManager::generateTimestampFileName(char* buffer, uint32_t bufferSize
         return nullptr;
     }
 
-    DS1307_Time currentTime;
-    readDS1307Time(currentTime);
+    DS3231_Time currentTime;
+    readDS3231Time(currentTime);
 
     uint32_t milliseconds = millis() % 1000;
     
@@ -289,7 +289,7 @@ bool SDCardManager::setLastModTime(const char* path, uint16_t year, uint16_t mon
     return result;
 }
 
-// 设置文件最后修改时间 - 接受DS1307_Time结构体
-bool SDCardManager::setLastModTime(const char* path, const DS1307_Time& time) {
+// 设置文件最后修改时间 - 接受DS3231_Time结构体
+bool SDCardManager::setLastModTime(const char* path, const DS3231_Time& time) {
     return setLastModTime(path, time.year, time.month, time.date, time.hours, time.minutes, time.seconds);
 }

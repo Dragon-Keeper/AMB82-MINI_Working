@@ -255,7 +255,7 @@ uint32_t MJPEGEncoder::readLE32(const uint8_t* buffer) {
            (uint32_t)buffer[3] << 24;
 }
 
-bool MJPEGEncoder::end(const DS1307_Time* fileTime) {
+bool MJPEGEncoder::end(const DS3231_Time* fileTime) {
     if (!m_recording || !m_buffer) {
         return false;
     }

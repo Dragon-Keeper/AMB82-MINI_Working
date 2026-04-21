@@ -12,7 +12,7 @@
 #include <FreeRTOS.h>
 #include <semphr.h>
 #include "Camera_SDCardManager.h"
-#include "DS1307_ClockModule.h"
+#include "DS3231_ClockModule.h"
 #include "AmebaFatFS.h"
 
 // AVI索引条目结构体
@@ -31,7 +31,7 @@ public:
     bool begin(const char* fileName, uint32_t width, uint32_t height, uint32_t fps);
     bool addVideoFrame(const uint8_t* jpegData, uint32_t jpegSize, uint32_t timestamp);
     bool addAudioFrame(const uint8_t* audioData, uint32_t audioSize, uint32_t timestamp);
-    bool end(const DS1307_Time* fileTime = nullptr);
+    bool end(const DS3231_Time* fileTime = nullptr);
     
     bool isRecording() const;
     uint32_t getFrameCount() const;

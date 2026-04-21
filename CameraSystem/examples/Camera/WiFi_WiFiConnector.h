@@ -78,6 +78,8 @@ private:
     bool _connectToAP(const char* ssid, const char* password);
     bool _validateIpSegment(uint8_t targetSegment3);
     int _findSavedAPIndex(const char* ssid);
+    void _resetWiFiHardware();
+    bool _isSSIDAvailable(const char* ssid);
     void _loadFromFlash();
     void _saveToFlash();
 

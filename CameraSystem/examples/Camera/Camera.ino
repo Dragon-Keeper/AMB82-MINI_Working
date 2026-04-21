@@ -26,7 +26,7 @@
  * - 显示模块: ST7789 240x320 TFT (SPI/DMA SPI接口)
  * - 输入设备: EC11旋转编码器 (CLK/DT/SW引脚并联10nF陶瓷电容去抖)
  * - 存储设备: Micro SD卡 (建议8GB以上, FAT32格式)
- * - 实时时钟: DS1307 (I2C接口, 支持NTP网络校时)
+ * - 实时时钟: DS3231 (I2C接口, 支持NTP网络校时, 温度补偿)
  * - 音频采集: INMP441 I2S麦克风 (16kHz/16bit/单声道)
  * - 电源要求: 12V直流输入
  *
@@ -245,8 +245,8 @@ void handleEncoderButton();
 #include "System_ResourceManager.h"
 #include "System_ConfigManager.h"
 
-// 包含DS1307时钟模块头文件
-#include "DS1307_ClockModule.h"
+// 包含DS3231时钟模块头文件
+#include "DS3231_ClockModule.h"
 
 // 包含视频录制模块头文件
 #include "VideoRecorder.h"
@@ -262,14 +262,14 @@ void handleEncoderButton();
 // 创建OTA升级模块实例
 OTA ota;
 
-// 时间更新开关：设置为1时，刷入固件会更新DS1307时间；设置为0时，不会更新时间
-#define UPDATE_DS1307_TIME 0 // 停止时间更新
+// 时间更新开关：设置为1时，刷入固件会更新DS3231时间；设置为0时，不会更新时间
+#define UPDATE_DS3231_TIME 0 // 停止时间更新
 
-// 创建DS1307时钟模块实例
-DS1307_ClockModule clockModule;
+// 创建DS3231时钟模块实例
+DS3231_ClockModule clockModule;
 
 // 时间变量
-DS1307_Time currentTime;
+DS3231_Time currentTime;
 
 // 任务函数现在在RTOS_TaskFactory.cpp中实现
 
@@ -313,32 +313,32 @@ void setup() {
     // 初始化串口
     Serial.begin(115200);
 
-    // 初始化DS1307时钟模块
+    // 初始化DS3231时钟模块
     if (clockModule.initialize()) {
-        Serial.println("DS1307时钟模块初始化成功");
+        Serial.println("DS3231时钟模块初始化成功");
     } else {
-        Serial.println("DS1307时钟模块初始化失败");
+        Serial.println("DS3231时钟模块初始化失败");
     }
     
-    // 仅在UPDATE_DS1307_TIME为1时更新DS1307时间
-    #if UPDATE_DS1307_TIME
-    // 设置DS1307初始时间为2026年1月8日 12:00:00
-    DS1307_Time initTime;
+    // 仅在UPDATE_DS3231_TIME为1时更新DS3231时间
+    #if UPDATE_DS3231_TIME
+    // 设置DS3231初始时间为2026年1月8日 12:00:00
+    DS3231_Time initTime;
     initTime.seconds = 0;
     initTime.minutes = 0;
     initTime.hours = 12;
-    initTime.day = 5; // 星期五
-    initTime.date = 8;
+    initTime.day = 5; // 星期四
+    initTime.date = 9;
     initTime.month = 1;
     initTime.year = 2026;
     
     if (clockModule.writeTime(initTime)) {
-        Serial.println("DS1307初始时间已设置为2026-01-08 12:00:00");
+        Serial.println("DS3231初始时间已设置为2026-01-09 12:00:00");
     } else {
-        Serial.println("DS1307初始时间设置失败");
+        Serial.println("DS3231初始时间设置失败");
     }
     #else
-    Serial.println("DS1307时间更新功能已禁用");
+    Serial.println("DS3231时间更新功能已禁用");
     #endif
     
     // 初始化工具模块
@@ -491,17 +491,37 @@ unsigned long timeCounter = 0;
 // 后台校时任务函数
 void taskTimeSync(void* parameters) {
     Utils_Logger::info("后台校时任务启动");
-    
+
+    updateTimeSyncStatusFromTask(TIME_SYNC_CONNECTING_WIFI, "Connecting WiFi...", 5, "-");
+
     bool wifiConnected = false;
     const int MAX_RETRIES = 5;
     const int RETRY_DELAY = 3000; // 3秒重试间隔
-    
+
     // 尝试连接WiFi网络
     for (int i = 0; i < WIFI_CONFIG_COUNT; i++) {
         if (wifiConnected) break;
-        
+
         Utils_Logger::info("尝试连接WiFi网络: %s", wifiConfigs[i].ssid);
-        
+
+        // 先扫描检查SSID是否存在，避免连接不存在的SSID导致WiFi驱动崩溃
+        Utils_Logger::info("扫描WiFi网络检查SSID: %s", wifiConfigs[i].ssid);
+        int numNetworks = WiFi.scanNetworks();
+        if (numNetworks >= 0) {
+            bool ssidFound = false;
+            for (int j = 0; j < numNetworks; j++) {
+                if (strcmp(WiFi.SSID(j), wifiConfigs[i].ssid) == 0) {
+                    ssidFound = true;
+                    break;
+                }
+            }
+            if (!ssidFound) {
+                Utils_Logger::info("SSID %s 不存在，跳过连接", wifiConfigs[i].ssid);
+                continue;
+            }
+            Utils_Logger::info("SSID %s 存在，准备连接", wifiConfigs[i].ssid);
+        }
+
         WiFi.begin(wifiConfigs[i].ssid, wifiConfigs[i].password);
         
         for (int retry = 0; retry < MAX_RETRIES; retry++) {
@@ -521,6 +541,7 @@ void taskTimeSync(void* parameters) {
                     Utils_Logger::info("成功连接到WiFi网络: %s", wifiConfigs[i].ssid);
                     Utils_Logger::info("IP地址: %s", ipToString(WiFi.localIP()).c_str());
                     wifiConnected = true;
+                    updateTimeSyncStatusFromTask(TIME_SYNC_CONNECTED_WIFI, "WiFi Connected", 30, wifiConfigs[i].ssid);
                     break;
                 } else {
                     Utils_Logger::info("WiFi连接成功但未获取到IP地址");
@@ -538,6 +559,7 @@ void taskTimeSync(void* parameters) {
     if (wifiConnected) {
         // 获取NTP时间
         Utils_Logger::info("获取NTP时间...");
+        updateTimeSyncStatusFromTask(TIME_SYNC_NTP_INIT, "Initializing NTP...", 40, "-");
         bool ntpSync = false;
         const int NTP_MAX_RETRIES = 3;
         const int NTP_TIMEOUT = 2000; // 2秒超时
@@ -548,6 +570,7 @@ void taskTimeSync(void* parameters) {
             
             String currentServer = ntpServers[serverIndex];
             Utils_Logger::info("尝试使用NTP服务器: %s", currentServer.c_str());
+            updateTimeSyncStatusFromTask(TIME_SYNC_NTP_SYNCING, "Syncing NTP...", 50 + serverIndex * 10, currentServer.c_str());
             
             // 初始化NTP客户端
             timeClient.setPoolServerName(currentServer.c_str());
@@ -562,28 +585,31 @@ void taskTimeSync(void* parameters) {
                     Utils_Logger::info("当前时间: %s", timeClient.getFormattedTime().c_str());
                     Utils_Logger::info("当前日期: %s", timeClient.getFormattedDate().c_str());
                     ntpSync = true;
+                    updateTimeSyncStatusFromTask(TIME_SYNC_NTP_SUCCESS, "NTP Success", 70, currentServer.c_str());
                     
-                    // 校准DS1307时钟
-                    DS1307_Time ntpTime;
+                    // 校准DS3231时钟
+                    DS3231_Time ntpTime;
                     ntpTime.seconds = timeClient.getSeconds();
                     ntpTime.minutes = timeClient.getMinutes();
                     ntpTime.hours = timeClient.getHours();
-                    ntpTime.day = timeClient.getDay() + 1; // NTPClient返回0-6，DS1307需要1-7
+                    ntpTime.day = timeClient.getDay() + 1; // NTPClient返回0-6，DS3231需要1-7
                     ntpTime.date = timeClient.getMonthDay();
                     ntpTime.month = timeClient.getMonth();
                     ntpTime.year = timeClient.getYear();
                     
-                    Utils_Logger::info("校准DS1307时钟...");
+                    Utils_Logger::info("校准DS3231时钟...");
+                    updateTimeSyncStatusFromTask(TIME_SYNC_UPDATING_DS3231, "Updating RTC...", 80, currentServer.c_str());
                     if (clockModule.writeTime(ntpTime)) {
-                        Utils_Logger::info("DS1307时钟校准成功");
+                        Utils_Logger::info("DS3231时钟校准成功");
+                        updateTimeSyncStatusFromTask(TIME_SYNC_COMPLETE, "Sync Complete!", 100, currentServer.c_str());
                         
                         // 读取校准后的时间进行验证（已屏蔽输出，避免显示错误信息）
-                        DS1307_Time calibratedTime;
+                        DS3231_Time calibratedTime;
                         if (clockModule.readTime(calibratedTime)) {
                             // 不输出校准后的时间，因为可能存在I2C通信延迟导致的显示错误
                         }
                     } else {
-                        Utils_Logger::error("DS1307时钟校准失败");
+                        Utils_Logger::error("DS3231时钟校准失败");
                     }
                     
                     break;
@@ -596,13 +622,18 @@ void taskTimeSync(void* parameters) {
         
         if (!ntpSync) {
             Utils_Logger::error("NTP时间同步失败，已尝试所有国内服务器");
+            updateTimeSyncStatusFromTask(TIME_SYNC_NTP_FAILED, "NTP Failed", 60, "-");
         }
-        
-        // 断开WiFi连接以节省资源
+
+        // 断开WiFi连接以节省资源（只有在未完成同步时才更新状态）
         Utils_Logger::info("断开WiFi连接以节省资源");
+        if (g_timeSyncStatus.state != TIME_SYNC_COMPLETE) {
+            updateTimeSyncStatusFromTask(TIME_SYNC_DISCONNECTING, "Disconnecting...", 90, "-");
+        }
         WiFi.disconnect();
     } else {
         Utils_Logger::error("无法连接到任何WiFi网络");
+        updateTimeSyncStatusFromTask(TIME_SYNC_NTP_FAILED, "WiFi Failed", 10, "-");
     }
     
     Utils_Logger::info("后台校时任务完成");
@@ -618,23 +649,20 @@ void loop() {
         encoder.checkRotation();
     }
     
-    // DS1307时间读取与计数功能控制开关
-    // 开关状态可通过修改DS1307_TIME_READ_ENABLED宏来控制（1:启用, 0:禁用）
-    if (DS1307_TIME_READ_ENABLED) {
-        // 仅在非实时预览阶段每秒读取并输出一次DS1307时间，以提高预览帧率
+    // DS3231时间读取与计数功能控制开关
+    // 开关状态可通过修改DS3231_TIME_READ_ENABLED宏来控制（1:启用, 0:禁用）
+    if (DS3231_TIME_READ_ENABLED) {
+        // 仅在非实时预览阶段每秒读取并输出一次DS3231时间，以提高预览帧率
         if (StateManager::getInstance().getCurrentState() != STATE_CAMERA_PREVIEW) {
             if (timeCounter >= 100) { // 大约每1秒一次（loop每10ms执行一次）
                 timeCounter = 0;
-                
-                // 读取DS1307时间
-                bool timeValid = clockModule.readTime(currentTime);
-                
-                // 仅当时间读取成功且数据有效时，才打印时间到串口监视器
-                if (timeValid) {
-                  // 使用formatTime函数格式化时间输出
-                  char timeStr[20];
-                  clockModule.formatTime(currentTime, timeStr, sizeof(timeStr));
-                  Serial.println(timeStr);
+
+                // 读取DS3231时间（不在串口输出，避免日志刷屏）
+                clockModule.readTime(currentTime);
+
+                // 如果时间同步窗口正在显示，更新窗口内容
+                if (menuContext.isInTimeSyncWindow()) {
+                    menuContext.updateTimeSyncWindow();
                 }
             } else {
                 timeCounter++;
@@ -644,7 +672,7 @@ void loop() {
         // 开关关闭时的状态指示，仅在首次进入loop时输出一次
         static bool firstTime = true;
         if (firstTime) {
-            Utils_Logger::info("DS1307时间读取与计数功能已禁用");
+            Utils_Logger::info("DS3231时间读取与计数功能已禁用");
             firstTime = false;
         }
     }
@@ -705,11 +733,9 @@ void loop() {
                         StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
                     }
                 } else if (currentMenuItem == POS_E) {
-                    // E位置按下：创建WiFi文件传输任务
-                    Utils_Logger::info("主菜单E位置：创建WiFi文件传输任务");
-                    if (TaskFactory::createDefaultTask(TaskManager::TASK_FUNCTION_E)) {
-                        StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
-                    }
+                    // E位置按下：显示传输模式选择
+                    Utils_Logger::info("主菜单E位置：显示传输模式选择");
+                    menuContext.showTransferModeSelect();
                 } else if (currentMenuItem == POS_F) {
                     // F位置按下：进入系统设置子菜单
                     Utils_Logger::info("主菜单F位置：进入系统设置子菜单");

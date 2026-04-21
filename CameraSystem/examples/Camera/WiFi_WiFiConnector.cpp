@@ -207,6 +207,11 @@ bool WiFiConnector::_connectToAP(const char* ssid, const char* password)
 {
     Utils_Logger::info("[WiFiConn] Connecting to %s...", ssid);
 
+    if (!_isSSIDAvailable(ssid)) {
+        Utils_Logger::info("[WiFiConn] SSID %s not found in scan results, skipping connection", ssid);
+        return false;
+    }
+
     char ssidBuf[WIFI_CONN_SSID_MAX_LEN];
     char passBuf[WIFI_CONN_PASS_MAX_LEN];
     strncpy(ssidBuf, ssid, sizeof(ssidBuf) - 1);
@@ -229,8 +234,57 @@ bool WiFiConnector::_connectToAP(const char* ssid, const char* password)
         return true;
     }
 
-    Utils_Logger::error("[WiFiConn] Failed to connect to %s", ssid);
+    Utils_Logger::error("[WiFiConn] Failed to connect to %s, resetting WiFi hardware", ssid);
+    _resetWiFiHardware();
     return false;
+}
+
+bool WiFiConnector::_isSSIDAvailable(const char* ssid)
+{
+    Utils_Logger::info("[WiFiConn] Scanning for available networks to check SSID: %s", ssid);
+
+    int numNetworks = WiFi.scanNetworks();
+    if (numNetworks < 0) {
+        Utils_Logger::error("[WiFiConn] Network scan failed, error code: %d", numNetworks);
+        return false;
+    }
+
+    Utils_Logger::info("[WiFiConn] Found %d networks", numNetworks);
+
+    bool found = false;
+    for (int i = 0; i < numNetworks; i++) {
+        String availableSSID = WiFi.SSID(i);
+        Utils_Logger::info("[WiFiConn] Scan[%d]: %s", i, availableSSID.c_str());
+        if (availableSSID == ssid) {
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        Utils_Logger::info("[WiFiConn] SSID %s not found in scan results", ssid);
+    } else {
+        Utils_Logger::info("[WiFiConn] SSID %s found, proceeding with connection", ssid);
+    }
+
+    return found;
+}
+
+void WiFiConnector::_resetWiFiHardware()
+{
+    Utils_Logger::info("[WiFiConn] Resetting WiFi hardware...");
+
+    wifi_config_autoreconnect(0, 0, 0);
+    WiFi.disconnect();
+    delay(500);
+
+    wifi_off();
+    delay(500);
+
+    wifi_on(RTW_MODE_STA);
+    delay(1000);
+
+    Utils_Logger::info("[WiFiConn] WiFi hardware reset complete");
 }
 
 bool WiFiConnector::_validateIpSegment(uint8_t targetSegment3)

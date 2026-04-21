@@ -7,6 +7,796 @@
 
 ## 开发记录
 
+### 版本 V1.48 - 不存在WiFi SSID连接崩溃修复与文件传输返回功能 (2026-04-20)
+
+#### 问题描述
+1. **WiFi SSID不存在时系统崩溃**：当开发板所在环境中不存在Force或Tiger SSID时，执行"智能配网"或"网络校时"操作，系统在尝试连接不存在的SSID过程中发生崩溃（Bus Fault，栈损坏）
+2. **崩溃根因**：`Menu_MenuContext.cpp`中的`executeOTA()`和`executeBleWifiConfig()`函数直接调用`WiFi.begin()`连接Force/Tiger SSID，没有先检查SSID是否存在。Realtek AmebaPro2的WiFi驱动在尝试连接不存在的SSID时，会导致WiFi驱动状态机进入异常状态，触发崩溃
+3. **文件传输功能缺少返回选项**：传输模式选择界面只有USB和WEB两个选项，无法直接返回主菜单
+
+#### 根本原因分析
+- `WiFiConnector`类的`_connectToAP()`方法已有`_isSSIDAvailable()`检查（V1.41修复）
+- `Camera.ino`的`taskTimeSync`函数已有`WiFi.scanNetworks()`检查（V1.42修复）
+- 但`Menu_MenuContext.cpp`中的`executeOTA()`和`executeBleWifiConfig()`**遗漏了SSID存在性检查**，直接调用`WiFi.begin()`
+
+#### 解决要点
+1. 在`executeOTA()`的Force/Tiger连接循环中，每次尝试连接前先调用`WiFi.scanNetworks()`检查SSID是否存在
+2. 在`executeBleWifiConfig()`的Force/Tiger连接循环中，同样添加SSID存在性检查
+3. SSID不存在时跳过连接，在屏幕上显示"SSID not found"提示，继续尝试下一个SSID或进入BLE配网
+4. 在传输模式选择界面添加"3. 返回"选项，支持从文件传输界面返回主菜单
+5. 将`transferModeSelectDefaultUsb`(bool)改为`transferModeSelectIndex`(int: 0=USB, 1=WEB, 2=返回)
+
+#### 实施步骤
+1. 修改 `Menu_MenuContext.cpp` - executeOTA()添加SSID扫描检查
+2. 修改 `Menu_MenuContext.cpp` - executeBleWifiConfig()添加SSID扫描检查
+3. 修改 `Menu_MenuContext.cpp` - 传输模式选择界面添加返回选项
+4. 修改 `Menu_MenuContext.h` - 变量声明更新和新增returnFromTransferMode()
+5. 修改 `Shared_GlobalDefines.h` - 版本号从V1.47递增到V1.48
+
+#### 关键代码变更
+
+**1. Menu_MenuContext.cpp - executeOTA()添加SSID扫描检查**
+```cpp
+for (int i = 0; i < 2; i++) {
+    // 新增: 扫描WiFi网络检查SSID是否存在
+    Utils_Logger::info("[OTA] 扫描WiFi网络检查SSID: %s", knownSSIDs[i]);
+    int scanCount = WiFi.scanNetworks();
+    bool ssidExists = false;
+    if (scanCount >= 0) {
+        for (int s = 0; s < scanCount; s++) {
+            if (strcmp(WiFi.SSID(s), knownSSIDs[i]) == 0) {
+                ssidExists = true;
+                break;
+            }
+        }
+    }
+    WiFi.scanDelete();
+
+    if (!ssidExists) {
+        Utils_Logger::info("[OTA] SSID %s 不存在，跳过连接", knownSSIDs[i]);
+        tftManager.setTextColor(ST7789_GRAY, ST7789_BLACK);
+        tftManager.setCursor(50, 210);
+        tftManager.print(knownSSIDs[i]);
+        tftManager.print(" not found   ");
+        delay(500);
+        continue;
+    }
+    // ... 原有连接逻辑
+}
+```
+
+**2. Menu_MenuContext.cpp - executeBleWifiConfig()添加SSID扫描检查**
+```cpp
+for (int i = 0; i < 2; i++) {
+    // 新增: 扫描WiFi网络检查SSID是否存在
+    Utils_Logger::info("[BLE_WIFI] 扫描WiFi网络检查SSID: %s", knownSSIDs[i]);
+    int scanCount = WiFi.scanNetworks();
+    bool ssidExists = false;
+    if (scanCount >= 0) {
+        for (int s = 0; s < scanCount; s++) {
+            if (strcmp(WiFi.SSID(s), knownSSIDs[i]) == 0) {
+                ssidExists = true;
+                break;
+            }
+        }
+    }
+    WiFi.scanDelete();
+
+    if (!ssidExists) {
+        Utils_Logger::info("[BLE_WIFI] SSID %s 不存在，跳过连接", knownSSIDs[i]);
+        char skipMsg[32];
+        sprintf(skipMsg, "%s not found", knownSSIDs[i]);
+        showBleWifiConfigScreen(skipMsg);
+        delay(500);
+        continue;
+    }
+    // ... 原有连接逻辑
+}
+```
+
+**3. Menu_MenuContext.cpp - 传输模式选择界面添加返回选项**
+- `transferModeSelectDefaultUsb`(bool) → `transferModeSelectIndex`(int: 0=USB, 1=WEB, 2=返回)
+- 新增`returnFromTransferMode()`函数：重置状态 → 返回主菜单
+- 界面布局调整：3个选项(y=70, y=105, y=140)
+
+#### 验证要点
+- [ ] 无Force/Tiger SSID环境下，执行"智能配网"不崩溃，显示"not found"提示后进入BLE配网
+- [ ] 无Force/Tiger SSID环境下，执行"网络校时"不崩溃，显示错误提示后返回主菜单
+- [ ] 有Force SSID环境下，正常连接不受影响
+- [ ] 传输模式选择界面3个选项可正常切换
+- [ ] 选择"返回"选项后正常返回主菜单
+
+---
+
+### 版本 V1.47 - USB调试输出清理与英文UI本地化清单 (2026-04-20)
+
+#### 问题描述
+1. **USB模式调试输出冗余**：USB MSC模式进入/退出流程中，屏幕显示"1/6"到"6/6"及"1/4"到"4/4"的分步调试信息，这些信息仅用于开发调试阶段，对最终用户无意义，需要在正式版本中移除
+2. **英文UI内容未系统整理**：项目中大量界面文本仍为英文，缺乏完整的本地化清单，无法有效推进中文本地化工作
+
+#### 解决要点
+1. 注释掉USB_MassStorageModule.cpp中所有分步调试输出（enter()中的1/6~6/6，exit()中的1/4~4/4），仅保留功能性代码
+2. 全面扫描项目中所有源文件，识别所有在用户界面中显示的英文内容
+3. 将92条英文UI内容按功能模块分类整理，输出到Font.md文件，为后续中文本地化替换提供准确依据
+
+#### 实施步骤
+1. 修改 `USB_MassStorageModule.cpp` - 注释掉enter()中6条和exit()中4条调试输出print语句
+2. 全面扫描项目所有.cpp/.ino文件中的`.print()`调用，识别英文UI文本
+3. 创建 `Font.md` - 包含92条英文UI内容的完整清单，按10个功能模块分类，含屏幕位置、上下文说明和本地化优先级建议
+4. 修改 `Shared_GlobalDefines.h` - 版本号从V1.46递增到V1.47
+
+#### 关键代码变更
+
+**1. USB_MassStorageModule.cpp - 注释调试输出**
+```cpp
+// enter()中 - 注释掉6条调试输出：
+// m_tftManager->print("[1/6] Release WiFi...");
+// m_tftManager->print("[2/6] USB Init...");
+// m_tftManager->print("[3/6] SDIO Init...");
+// m_tftManager->print("[4/6] USB Status...");
+// m_tftManager->print("[5/6] Init Disk...");
+// m_tftManager->print("[6/6] Load Driver...");
+
+// exit()中 - 注释掉4条调试输出：
+// m_tftManager->print("[1/4] USB MSC Deinit...");
+// m_tftManager->print("[2/4] Wait settle...");
+// m_tftManager->print("[3/4] WiFi Restart...");
+// m_tftManager->print("[4/4] Done!");
+```
+
+**2. Font.md - 英文UI本地化清单（92条）**
+- USB MSC模式（5条）：USB MSC Mode, USB Connected!, PC can access SD card, Rotate: Exit dialog, Exit USB MSC?
+- OTA升级相关（21条）：State:, Device IP:, OTA failed, retrying..., OTA Server:, Exit OTA, Exiting OTA..., OTA Server IP Config, Rotate: Select option, Press: Confirm, Field 1/4~4/4, Using IP:, Rotate: +/-1, Press: Confirm field, IP Saved!, Connecting, Saved:, BLE WiFi Config..., Device IP:
+- 版本信息界面（5条）：Ver:, FW: v4.0.9, Build:, Cam: GC2053, Board: AMB82-MINI
+- BLE WiFi配网（19条）：BLE WiFi Config, Target IP seg3:, Status:, Press btn to cancel, Exit BLE WiFi?, WiFi Connected!, IP:, SSID:, Wrong IP reconnect..., Connecting Force..., Trying saved SSIDs..., BLE Config..., BLE Start Failed!, BLE Waiting..., Wrong IP segment!, BLE Timeout!, Configuring...
+- 传输模式选择（6条）：1., 2., Rotate: Select option, Press: Confirm, USB, WEB
+- 系统关闭（1条）：entering deep sleep...
+- ISP参数设置（8条）：A: Exposure, B: Brightness, C: Contrast, D: Saturation, E: Reset, F: Back, Manual, Auto
+- WiFi文件服务器（13条）：SSID:, PASS:, IP:, http://, Exit File Transfer?, [*] Cancel, [ ] Confirm, Rotate: Switch option, Press: Execute action, Cancelled, Returning to info..., Exiting..., Closing WiFi Server
+- 媒体文件浏览与播放（13条）：SD card not inserted, Invalid file name, File not found, Unsupported video format, Memory error, Read error, Media Files, No media files found, Back, Decode Error, No Preview, VIDEO, IMAGE
+- 菜单项标签（1条）：BLE WiFi
+
+#### 待验证项
+- [ ] 编译通过
+- [ ] USB MSC模式进入时屏幕不再显示1/6~6/6调试步骤
+- [ ] USB MSC模式退出时屏幕不再显示1/4~4/4调试步骤
+- [ ] USB MSC功能正常工作（进入、文件传输、退出）
+- [ ] 串口监视器显示"当前版本: V1.47"
+
+### 版本 V1.46 - BLE WiFi配网退出确认弹窗功能实现 (2026-04-19)
+
+#### 问题描述
+1. **BLE配网无退出确认**：在BLE WiFi配网过程中，用户按下按钮直接停止配网并返回菜单，没有确认步骤，容易误操作
+2. **旋转旋钮无响应**：在BLE配网界面中旋转旋钮被忽略，用户无法通过旋钮主动中断配网
+3. **与OTA模式交互不一致**：OTA升级中界面已有退出确认弹窗（旋转弹出、按钮切换选项），BLE配网应保持一致的交互逻辑
+
+#### 解决要点
+1. 在BLE配网界面中，旋转旋钮弹出退出确认对话框（与OTA模式一致）
+2. 按钮按下也弹出退出确认对话框（而非直接退出）
+3. 退出确认对话框UI样式与OTA模式保持一致：白色边框、"返回"/"确认"中文选项、黄色高亮选中项
+4. 添加状态判断逻辑：`handleBleExitRotation()`和`handleBleExitButton()`均检查`inBleWifiConfig`状态，防止非配网模式下误触发
+5. 在弹窗显示期间暂停BLE配网状态刷新，防止`showBleWifiConfigScreen()`覆盖弹窗
+
+#### 实施步骤
+1. 修改 `Menu_MenuContext.h` - 添加`bleExitDialogShown`和`bleExitDefaultBack`状态变量，添加`showBleExitDialog()`、`handleBleExitRotation()`、`handleBleExitButton()`、`isBleExitDialogShown()`方法声明
+2. 修改 `Menu_MenuContext.cpp`：
+   - 旋转回调：BLE配网时旋转旋钮调用`handleBleExitRotation()`（替换原来的忽略逻辑）
+   - 按钮回调：BLE配网时按钮调用`showBleExitDialog()`/`handleBleExitButton()`（替换原来的直接退出）
+   - loop()中BLE按钮处理：改为弹窗逻辑（替换原来的`stopBleWifiConfig()`直接调用）
+   - BLE等待循环：弹窗显示期间暂停状态刷新和WiFi连接检查
+   - `showBleWifiConfigScreen()`：弹窗显示时跳过屏幕刷新
+   - `stopBleWifiConfig()`：重置弹窗状态变量
+3. 修改 `Shared_GlobalDefines.h` - 版本号从V1.45递增到V1.46
+
+#### 关键代码变更
+
+**1. 旋转回调 - BLE配网旋转处理**
+```cpp
+// 原来：忽略旋转事件
+if (menuContext.isInBleWifiConfig()) {
+    break;
+}
+
+// 修改后：弹出/切换退出对话框
+if (menuContext.isInBleWifiConfig()) {
+    menuContext.handleBleExitRotation(direction);
+    break;
+}
+```
+
+**2. 按钮回调 - BLE配网按钮处理**
+```cpp
+// 新增：BLE配网按钮处理（在USB MSC处理之后）
+if (menuContext.isInBleWifiConfig()) {
+    if (menuContext.isBleExitDialogShown()) {
+        menuContext.handleBleExitButton();
+    } else {
+        menuContext.showBleExitDialog();
+    }
+    return;
+}
+```
+
+**3. showBleExitDialog() - 退出确认对话框**
+- UI样式与OTA退出弹窗完全一致
+- 标题："Exit BLE WiFi?"
+- 选项："返回"（strBack）/ "确认"（strConfirmExit）
+- 默认选中"返回"，旋转切换选项
+
+**4. handleBleExitButton() - 按钮选择处理**
+- 选择"返回"：关闭弹窗，恢复配网界面，继续配网
+- 选择"确认"：调用`stopBleWifiConfig()`停止配网并返回菜单
+
+**5. BLE等待循环弹窗暂停逻辑**
+```cpp
+// 弹窗显示期间不刷新状态屏幕
+if (elapsed % 5000 < 500 && !bleExitDialogShown) {
+    showBleWifiConfigScreen(statusMsg);
+}
+
+// 弹窗显示期间暂停WiFi连接检查
+if (bleExitDialogShown) {
+    delay(100);
+    continue;
+}
+```
+
+**6. showBleWifiConfigScreen()防覆盖**
+```cpp
+void MenuContext::showBleWifiConfigScreen(const char* statusMsg) {
+    if (bleExitDialogShown) {
+        return;  // 弹窗显示时不刷新屏幕，防止覆盖弹窗
+    }
+    // ...正常显示逻辑
+}
+```
+
+#### 待验证项
+- [ ] 编译通过
+- [ ] BLE配网中旋转旋钮弹出退出确认对话框
+- [ ] BLE配网中按钮按下弹出退出确认对话框
+- [ ] 退出对话框中选择"返回"继续配网
+- [ ] 退出对话框中选择"确认"停止配网并返回菜单
+- [ ] 弹窗显示期间配网界面不被覆盖
+- [ ] 非BLE配网模式下不会误触发弹窗
+- [ ] 串口监视器显示"当前版本: V1.46"
+
+### 版本 V1.45 - USB MSC模式无法关闭及重复启用失败问题修复 (2026-04-19)
+
+#### 问题描述
+1. **关闭失败**：通过弹出窗口选择关闭USB后，U盘功能无法正常关闭，电脑端仍显示USB设备连接
+2. **状态反转**：第二次打开USB功能时，界面显示6个步骤正常，但实际执行的是关闭操作而非启用USB功能
+3. **第三次失败**：第三次打开USB功能时，电脑显示"无法识别的USB设备"，无法打开U盘功能
+
+#### 根本原因分析
+
+**核心问题：`USBDeinit()`不完整，USB OTG硬件未被反初始化**
+
+1. **`USBMassStorage::USBDeinit()`只做了部分清理**：
+   - 调用`usbd_msc_deinit()`卸载MSC类驱动
+   - 释放`disk_operations`内存
+   - **未调用`_usb_deinit()`**：USB OTG硬件控制器仍处于初始化状态
+
+2. **第二次enter()时USB硬件冲突**：
+   - `enter()`调用`USBInit()`→`_usb_init()`时，USB OTG硬件仍处于已初始化状态
+   - 在已初始化的USB硬件上再次调用`_usb_init()`，导致USB硬件状态混乱
+   - 表现为：界面显示正常（6步骤都执行了），但USB实际功能被关闭而非启用
+
+3. **exit()未恢复WiFi**：
+   - 退出USB模式后WiFi保持关闭状态
+   - 系统的校时任务（taskTimeSync）等WiFi依赖功能无法正常工作
+   - 第二次enter()时调用`wifi_off()`虽然无害，但WiFi从未被恢复
+
+4. **第三次完全失败**：
+   - 两轮不完整的init/deinit循环后，USB OTG硬件处于不可恢复的状态
+   - 电脑端无法完成USB设备枚举，显示"无法识别的USB设备"
+
+#### 解决要点
+1. 在`USBMassStorage::USBDeinit()`中添加`_usb_deinit()`调用，完整反初始化USB OTG硬件
+2. 在`USB_MassStorageModule::exit()`中添加`wifi_on(RTW_MODE_STA)`恢复WiFi硬件
+3. 在exit()中添加分步骤屏幕显示，便于诊断退出过程
+4. 修正enter()步骤编号从[1/6]开始（而非[0/6]），保持一致性
+
+#### 实施步骤
+1. 修改 `CameraSystem/USB/src/USBMassStorage.cpp` - 在`USBDeinit()`末尾添加`_usb_deinit()`调用
+2. 修改 `USB_MassStorageModule.cpp` - 重构`exit()`方法，添加完整的退出流程：
+   - 步骤1：USBDeinit()（含_usb_deinit()）
+   - 步骤2：等待硬件稳定（500ms）
+   - 步骤3：wifi_on(RTW_MODE_STA)恢复WiFi
+   - 步骤4：完成
+3. 修改 `USB_MassStorageModule.cpp` - 修正enter()步骤编号
+4. 修改 `Shared_GlobalDefines.h` - 版本号从V1.44递增到V1.45
+
+#### 关键代码变更
+
+**1. USBMassStorage.cpp - USBDeinit()添加_usb_deinit()**
+```cpp
+void USBMassStorage::USBDeinit(void)
+{
+    usbd_msc_deinit();
+    if (disk_operations) {
+        free(disk_operations);
+        disk_operations = NULL;
+    }
+    _usb_deinit();  // 新增：完整反初始化USB OTG硬件
+}
+```
+
+**2. USB_MassStorageModule.cpp - exit()完整退出流程**
+```cpp
+void USB_MassStorageModule::exit() {
+    if (m_state == STATE_IDLE) {
+        return;
+    }
+
+    m_state = STATE_STOPPING;
+
+    m_tftManager->fillScreen(ST7789_BLACK);
+    m_tftManager->setTextColor(ST7789_YELLOW, ST7789_BLACK);
+    m_tftManager->setTextSize(1);
+    m_tftManager->setCursor(30, 60);
+    m_tftManager->print("[1/4] USB MSC Deinit...");
+
+    m_usbMassStorage.USBDeinit();  // 含usbd_msc_deinit() + _usb_deinit()
+
+    m_tftManager->setCursor(30, 80);
+    m_tftManager->print("[2/4] Wait settle...");
+    delay(500);
+
+    m_tftManager->setCursor(30, 100);
+    m_tftManager->print("[3/4] WiFi Restart...");
+
+    wifi_on(RTW_MODE_STA);  // 恢复WiFi硬件
+    delay(1000);
+
+    m_tftManager->setCursor(30, 120);
+    m_tftManager->print("[4/4] Done!");
+    delay(500);
+
+    m_state = STATE_IDLE;
+    m_exitDialogShown = false;
+    m_exitConfirmed = true;
+}
+```
+
+#### 退出流程屏幕诊断指南（V1.45）
+通过屏幕显示的步骤编号，可以判断退出过程问题发生的位置：
+- **[1/4] 卡住** → USBDeinit()失败（usbd_msc_deinit或_usb_deinit异常）
+- **[2/4] 卡住** → 硬件稳定等待中异常
+- **[3/4] 卡住** → wifi_on()恢复WiFi失败
+- **[4/4]** → 退出成功
+
+#### USB MSC完整生命周期（V1.45）
+```
+进入流程（enter）：
+  [1/6] Release WiFi → WiFi.disconnect() + wifi_off()
+  [2/6] USB Init     → _usb_init()
+  [3/6] SDIO Init    → sd_gpio_init() + sdio_driver_init()
+  [4/6] USB Status   → wait_usb_ready()
+  [5/6] Init Disk    → malloc + 设置disk_operations
+  [6/6] Load Driver  → usbd_msc_init()
+
+退出流程（exit）：
+  [1/4] USB MSC Deinit → usbd_msc_deinit() + free(disk_operations) + _usb_deinit()
+  [2/4] Wait settle    → delay(500)
+  [3/4] WiFi Restart   → wifi_on(RTW_MODE_STA)
+  [4/4] Done           → delay(500)
+```
+
+#### 待验证项
+- [ ] 编译通过
+- [ ] 首次进入USB MSC模式正常工作
+- [ ] 退出USB MSC模式后电脑端正确断开U盘
+- [ ] 第二次进入USB MSC模式正常工作
+- [ ] 第三次及以后多次进出USB MSC模式均正常
+- [ ] 退出后WiFi恢复正常，校时任务可正常工作
+- [ ] 串口监视器显示"当前版本: V1.45"
+
+#### USB MSC技术限制文档
+
+**限制现象描述**
+
+由于计算机操作系统对USB大容量存储设备（U盘）的处理机制要求，在执行U盘安全退出操作后，必须将U盘进行物理拔插，系统才能重新检测并正常使用该U盘。此限制为USB MSC协议层面的固有特性，非本项目代码缺陷。
+
+**技术原理**
+
+1. USB MSC设备在计算机端执行"安全弹出"操作时，操作系统会执行以下步骤：
+   - 刷新文件系统缓存，确保所有数据写入存储介质
+   - 卸载文件系统，释放设备句柄
+   - 向USB设备发送"允许移除"信号
+   - 在设备管理器中将设备标记为"已移除"状态
+
+2. 计算机操作系统在设备被标记为"已移除"后，**不会自动重新枚举同一USB设备**。这是为了防止数据损坏和确保设备状态一致性。
+
+3. 从设备端（AMB82-MINI）角度：
+   - `USBDeinit()` 正确调用了 `usbd_msc_deinit()` + `_usb_deinit()`，USB OTG硬件已完全反初始化
+   - `enter()` 再次调用 `USBInit()` → `_usb_init()` 时，USB OTG硬件重新初始化
+   - 设备端重新完成USB设备枚举流程（USB reset → 设备描述符请求 → 配置描述符请求 → MSC驱动加载）
+   - 但计算机端因设备已被标记为"已移除"，**拒绝重新识别同一物理端口上的同一设备**
+
+4. 物理拔插的作用：
+   - 物理拔出USB线 → 计算机检测到USB端口断开事件 → 清除端口状态
+   - 物理插入USB线 → 计算机检测到USB端口连接事件 → 触发全新设备枚举流程
+   - 这是操作系统层面强制重新枚举的唯一可靠方式
+
+**复现步骤**
+
+1. 进入USB MSC模式，电脑正常识别U盘
+2. 在电脑端对U盘执行"安全弹出"操作
+3. 在设备端通过旋转旋钮→确认退出，关闭USB MSC模式
+4. 再次进入USB MSC模式
+5. **预期结果**：电脑无法自动识别U盘，需要物理拔插USB线后才能重新识别
+
+**系统环境信息**
+
+| 项目 | 信息 |
+|------|------|
+| 设备端 | AMB82-MINI (Realtek AmebaPro2 RTL8735B) |
+| USB模式 | USB OTG Device模式，MSC类 |
+| 操作系统 | Windows 10/11，macOS，Linux均存在此限制 |
+| USB库 | CameraSystem/USB (基于Realtek SDK usbd_msc) |
+| SD卡 | 通过SDIO接口连接 |
+
+**对项目开发的具体影响分析**
+
+1. **功能边界**：USB MSC功能不支持"热重入"（即不拔插USB线的情况下连续进出MSC模式），这是USB协议层面的限制而非代码缺陷
+2. **用户体验**：用户在退出USB MSC模式后再次进入时，必须物理拔插USB线才能让电脑重新识别设备
+3. **可能的缓解方案**（未实施，仅记录）：
+   - 方案A：在退出USB MSC模式时，在屏幕上显示提示"请拔插USB线后重新进入"
+   - 方案B：研究是否可通过USB端口的电气重置（如USB D+/D-信号拉低）模拟拔插效果
+   - 方案C：使用USB复合设备模式，在MSC之外维持一个始终存在的USB功能（如CDC），避免设备完全消失
+4. **当前处理方式**：在V1.45版本中，exit()流程已完整实现USBDeinit()+WiFi恢复，确保每次进入USB MSC模式时硬件状态干净。物理拔插限制作为已知技术约束记录在案。
+
+---
+
+### 版本 V1.44 - WiFi与USB OTG资源冲突导致USB MSC模式卡死问题修复 (2026-04-19)
+
+#### 问题描述
+1. **现象**：USB MSC模式在进入时卡死在初始化阶段，屏幕显示"[1/5] USB Init..."后无响应
+2. **电脑识别**：电脑端提示"无法识别的USB设备"
+3. **TTL调试**：TTL模式下同样卡住，无法通过串口日志诊断
+
+#### 根本原因分析
+Camera项目在启动时会通过后台任务(taskTimeSync)初始化并保持WiFi连接。当用户进入USB MSC模式时，WiFi和USB OTG硬件模块存在资源共享冲突。
+
+AMB82-MINI的WiFi和USB OTG共享相同的硬件资源，如果在没有释放WiFi资源的情况下直接初始化USB，会导致：
+1. USB OTG初始化失败或卡死
+2. USB设备枚举不完整，电脑无法识别
+
+#### 解决要点
+1. 在USB初始化前完全释放WiFi资源
+2. 调用`WiFi.disconnect()`断开WiFi连接
+3. 调用`wifi_off()`关闭WiFi硬件
+4. 添加足够的延时确保资源完全释放
+5. 更新屏幕进度显示为6个步骤（新增WiFi释放步骤）
+
+#### 实施步骤
+1. 修改 `USB_MassStorageModule.h` - 添加 `#include <WiFi.h>` 以使用WiFi相关函数
+2. 修改 `USB_MassStorageModule.cpp` - 在enter()方法中添加WiFi资源释放步骤
+3. 修改 `Shared_GlobalDefines.h` - 版本号从V1.43递增到V1.44
+
+#### 关键代码变更
+- `USB_MassStorageModule.h` - 添加WiFi头文件：
+  ```cpp
+  #include <WiFi.h>
+  ```
+
+- `USB_MassStorageModule.cpp` - `enter()` 方法新增WiFi释放步骤：
+  ```cpp
+  m_tftManager->setCursor(30, 60);
+  m_tftManager->print("[0/6] Release WiFi...");
+
+  Utils_Logger::info("[USB_MSD_MODULE] 释放WiFi资源，避免USB/WiFi冲突");
+
+  if (WiFi.status() == WL_CONNECTED) {
+      WiFi.disconnect();
+      Utils_Logger::info("[USB_MSD_MODULE] WiFi已断开连接");
+  }
+
+  delay(500);
+
+  wifi_off();
+  delay(500);
+
+  Utils_Logger::info("[USB_MSD_MODULE] WiFi硬件已关闭");
+
+  m_tftManager->setCursor(30, 60);
+  m_tftManager->print("[1/6] USB Init...");
+  ```
+
+#### 屏幕诊断指南（V1.44）
+通过屏幕显示的步骤编号，可以判断问题发生的位置：
+- **[0/6] 卡住** → WiFi资源释放失败
+- **[1/6] 卡住** → USBInit()初始化失败
+- **[2/6] 卡住** → SDIOInit()初始化失败
+- **[3/6] 卡住** → USBStatus()调用失败
+- **[4/6] 卡住** → initializeDisk()失败
+- **[5/6] 卡住** → loadUSBMassStorageDriver()失败
+- **[6/6]** 但PC仍无法识别 → isConnected()返回0，USB枚举可能有问题
+
+#### 待验证项
+- [ ] 编译通过
+- [ ] USB直连模式下正确显示6步诊断信息
+- [ ] 电脑端能正确识别USB设备
+- [ ] WiFi释放后不会影响系统其他功能
+- [ ] 串口监视器显示"当前版本: V1.44"
+
+---
+
+### 版本 V1.43 - USB MSC模式USB直连异常问题诊断与修复 (2026-04-19)
+
+#### 问题描述
+1. **TTL调试模式**：通过TTL调试接口测试文件传输功能的"USB"模式时，系统行为正常，USB MSC功能完整工作
+2. **USB直连模式**：使用USB接口直接连接电脑后，进入文件传输"USB"功能时，出现以下异常：
+   - 系统在显示标题"USB MSC Mode"和"Initializing USB..."后
+   - 标题消失，屏幕仅显示"Initializing usb..."的下半部分文字残影
+   - 系统似乎卡死，用户无法进行任何操作
+   - 电脑端提示"无法识别的USB设备"
+
+#### 根本原因分析
+根据问题现象和代码分析，可能的原因包括：
+
+1. **USB初始化时序问题**：当USB已经物理连接到PC时，USB OTG控制器的初始化时序可能与未连接时不同，需要更长的稳定时间
+
+2. **USB状态检测机制**：`USBStatus()` 返回0可能表示USB OTG尚未检测到主机连接，而 `isConnected()` 可能需要在初始化完成后一段时间才能返回正确的状态
+
+3. **缺少USB连接状态诊断**：原代码没有在初始化过程中检测USB连接状态，导致无法确定PC是否正确识别设备
+
+4. **exit()方法资源清理问题**：V1.39版本记录中提到"USBDeinit()因SDK中_usb_deinit()符号未导出导致链接错误，暂不调用"，但后来添加了USBDeinit()调用，存在资源未正确释放的风险
+
+#### 解决要点
+1. 在USB初始化过程中添加分步骤日志输出，便于诊断问题发生的具体阶段
+2. 在USB初始化后添加 `isConnected()` 状态检测，判断PC是否已识别设备
+3. 在USBInit()调用前添加100ms延迟，确保系统稳定
+4. 当USBStatus()返回非零值时，在屏幕上显示状态码便于诊断
+5. 版本号从V1.42递增到V1.43
+
+#### 实施步骤
+1. 修改 `USB_MassStorageModule.cpp` - 在enter()方法中添加：
+   - 分步骤日志（步骤1-6）
+   - USBStatus()返回值检测和显示
+   - isConnected()连接状态检测
+   - USBInit()前的100ms延迟
+2. 修改 `Shared_GlobalDefines.h` - 版本号从V1.42递增到V1.43
+
+#### 关键代码变更
+- `USB_MassStorageModule.cpp` - `enter()` 方法：
+  - 将步骤进度实时显示在屏幕上，便于通过屏幕诊断问题
+  - 显示格式：`[1/5] USB Init...` → `[2/5] SDIO Init...` → `[3/5] USB Status...` → `[4/5] Init Disk...` → `[5/5] Load Driver...` → `[OK] Checking connection...`
+  - 在USBInit()前添加100ms延迟确保系统稳定
+  - 初始化完成后延迟500ms再更新到运行状态
+  ```cpp
+  m_tftManager->setTextColor(ST7789_CYAN, ST7789_BLACK);
+  m_tftManager->setTextSize(2);
+  m_tftManager->setCursor(70, 20);
+  m_tftManager->print("USB MSC Mode");
+
+  m_tftManager->setTextColor(ST7789_WHITE, ST7789_BLACK);
+  m_tftManager->setTextSize(1);
+  m_tftManager->setCursor(30, 60);
+  m_tftManager->print("[1/5] USB Init...");
+
+  delay(100);
+
+  m_usbMassStorage.USBInit();
+
+  m_tftManager->setCursor(30, 80);
+  m_tftManager->print("[2/5] SDIO Init...");
+  m_usbMassStorage.SDIOInit();
+
+  m_tftManager->setCursor(30, 100);
+  m_tftManager->print("[3/5] USB Status...");
+  int usbStatus = m_usbMassStorage.USBStatus();
+
+  m_tftManager->setCursor(30, 120);
+  m_tftManager->print("[4/5] Init Disk...");
+  m_usbMassStorage.initializeDisk();
+
+  m_tftManager->setCursor(30, 140);
+  m_tftManager->print("[5/5] Load Driver...");
+  m_usbMassStorage.loadUSBMassStorageDriver();
+
+  m_tftManager->setCursor(30, 160);
+  m_tftManager->print("[OK] Checking connection...");
+  int connected = m_usbMassStorage.isConnected();
+
+  delay(500);
+  ```
+
+#### 屏幕诊断指南
+通过屏幕显示的步骤编号，可以判断问题发生的位置：
+- **[1/5] 卡住** → USBInit()初始化失败
+- **[2/5] 卡住** → SDIOInit()初始化失败
+- **[3/5] 卡住** → USBStatus()调用失败
+- **[4/5] 卡住** → initializeDisk()失败
+- **[5/5] 卡住** → loadUSBMassStorageDriver()失败
+- **[OK]** 但PC仍无法识别 → isConnected()返回0，USB枚举可能有问题
+
+#### 待验证项
+- [ ] 编译通过
+- [ ] TTL调试模式下USB MSC功能正常
+- [ ] USB直连模式下正确显示诊断信息
+- [ ] 电脑端能正确识别USB设备
+- [ ] 串口监视器显示"当前版本: V1.43"
+
+---
+
+### 版本 V1.42 - taskTimeSync函数WiFi连接崩溃修复 (2026-04-19)
+
+#### 问题描述
+1. **崩溃现象**：V1.41版本修复后，系统仍然崩溃
+2. **崩溃时机**：崩溃仍然发生在进入"网络校时"功能时，日志显示 `[Driver]: set ssid [Force]` 后崩溃
+3. **关键发现**：查看日志发现 `_isSSIDAvailable()` 的日志输出（`[WiFiConn] Scanning for available networks`）完全没有出现
+
+#### 根本原因
+V1.41的修复只针对 `WiFiConnector` 类中的 `_connectToAP()` 方法，但 `taskTimeSync` 函数（在 Camera.ino 中）直接调用 `WiFi.begin()` 连接WiFi，**没有经过 WiFiConnector 类**。因此 V1.41 的 SSID 存在性检查对 taskTimeSync 函数完全无效。
+
+#### 解决要点
+1. 在 `taskTimeSync` 函数中添加与 `_isSSIDAvailable()` 相同的SSID存在性检查逻辑
+2. 在 `WiFi.begin()` 之前先调用 `WiFi.scanNetworks()` 检查目标SSID是否存在
+3. 只有SSID存在时才执行 `WiFi.begin()` 连接
+4. 版本号从V1.41递增到V1.42
+
+#### 实施步骤
+1. 修改 `Camera.ino` 的 `taskTimeSync` 函数 - 在连接前添加SSID扫描检查
+2. 修改 `Shared_GlobalDefines.h` - 版本号从V1.41递增到V1.42
+
+#### 关键代码变更
+- `Camera.ino` - `taskTimeSync()` 函数：
+  ```cpp
+  // 先扫描检查SSID是否存在，避免连接不存在的SSID导致WiFi驱动崩溃
+  Utils_Logger::info("扫描WiFi网络检查SSID: %s", wifiConfigs[i].ssid);
+  int numNetworks = WiFi.scanNetworks();
+  if (numNetworks >= 0) {
+      bool ssidFound = false;
+      for (int j = 0; j < numNetworks; j++) {
+          if (WiFi.SSID(j) == String(wifiConfigs[i].ssid)) {
+              ssidFound = true;
+              break;
+          }
+      }
+      WiFi.scanDelete();
+      if (!ssidFound) {
+          Utils_Logger::info("SSID %s 不存在，跳过连接", wifiConfigs[i].ssid);
+          continue;
+      }
+      Utils_Logger::info("SSID %s 存在，准备连接", wifiConfigs[i].ssid);
+  }
+  ```
+
+---
+
+### 版本 V1.41 - WiFi连接前增加SSID存在性检查修复崩溃问题 (2026-04-19)
+
+#### 问题描述
+1. **崩溃现象**：在无Force SSID的WiFi网络环境下，进入"网络校时"功能时系统崩溃，Bus Fault，PC指向0x32316464（栈损坏）
+2. **崩溃时机**：崩溃发生在V1.40版本修复后，仍然在尝试连接不存在的SSID（Force）时崩溃
+3. **问题分析**：V1.40的 `_resetWiFiHardware()` 修复是在连接失败后的补救措施，但根本问题是**连接不存在的SSID时会触发WiFi驱动状态机崩溃**，而不是连接失败返回
+
+#### 根本原因
+Realtek AmebaPro2的WiFi驱动在尝试连接不存在的SSID时，会导致WiFi驱动状态机进入异常状态，后续任何WiFi操作都可能触发崩溃。即使在 `_connectToAP()` 失败后执行完整的硬件复位，也无法阻止已经发生的驱动崩溃。
+
+#### 解决要点
+1. 在尝试连接某个SSID之前，先扫描可用WiFi网络并检查该SSID是否存在于当前环境中
+2. 只有在SSID存在时才执行 `WiFi.begin()` 连接操作，避免触发WiFi驱动的崩溃
+3. 新增 `_isSSIDAvailable()` 私有方法，使用 `WiFi.scanNetworks()` 扫描并检查目标SSID
+4. 版本号从V1.40递增到V1.41
+
+#### 实施步骤
+1. 修改 `WiFi_WiFiConnector.h` - 添加 `_isSSIDAvailable()` 私有方法声明
+2. 修改 `WiFi_WiFiConnector.cpp` - 实现 `_isSSIDAvailable()` 方法
+3. 修改 `_connectToAP()` - 在连接前调用 `_isSSIDAvailable()` 检查SSID是否存在
+4. 修改 `Shared_GlobalDefines.h` - 版本号从V1.40递增到V1.41
+
+#### 关键代码变更
+- `WiFi_WiFiConnector.h`：添加 `_isSSIDAvailable(const char* ssid)` 方法声明
+- `WiFi_WiFiConnector.cpp`：
+  ```cpp
+  bool WiFiConnector::_isSSIDAvailable(const char* ssid)
+  {
+      Utils_Logger::info("[WiFiConn] Scanning for available networks to check SSID: %s", ssid);
+
+      int numNetworks = WiFi.scanNetworks();
+      if (numNetworks < 0) {
+          Utils_Logger::error("[WiFiConn] Network scan failed, error code: %d", numNetworks);
+          return false;
+      }
+
+      Utils_Logger::info("[WiFiConn] Found %d networks", numNetworks);
+
+      bool found = false;
+      for (int i = 0; i < numNetworks; i++) {
+          String availableSSID = WiFi.SSID(i);
+          if (availableSSID == ssid) {
+              found = true;
+              break;
+          }
+      }
+
+      WiFi.scanDelete();
+      return found;
+  }
+  ```
+- `_connectToAP()` 连接前检查：
+  ```cpp
+  if (!_isSSIDAvailable(ssid)) {
+      Utils_Logger::info("[WiFiConn] SSID %s not found in scan results, skipping connection", ssid);
+      return false;
+  }
+  ```
+
+---
+
+### 版本 V1.40 - 无Force网络环境下WiFi连接崩溃修复 (2026-04-19)
+
+#### 问题描述
+1. **崩溃现象**：在无Force SSID的WiFi网络环境下，进入"网络校时"功能时系统崩溃，Bus Fault，PC指向0x32316464（栈损坏）
+2. **崩溃时机**：崩溃发生在连续尝试连接不存在的SSID（Force）之后，与BLE无关
+3. **根本原因**：在连接不存在的SSID时，`WiFi.begin()` 失败后仅调用 `WiFi.disconnect()` 无法完全重置WiFi硬件状态，导致后续操作访问了处于异常状态的WiFi驱动，最终栈被覆写
+
+#### 解决要点
+1. 在 `_connectToAP()` 中，WiFi连接失败后执行完整的WiFi硬件复位流程，而非仅调用 `WiFi.disconnect()`
+2. 新增 `_resetWiFiHardware()` 私有方法，包含 `wifi_off()` → 等待 → `wifi_on()` → 等待 的完整复位序列
+3. 版本号从V1.39递增到V1.40
+
+#### 实施步骤
+1. 修改 `WiFi_WiFiConnector.h` - 添加 `_resetWiFiHardware()` 私有方法声明
+2. 修改 `WiFi_WiFiConnector.cpp` - 实现 `_resetWiFiHardware()` 方法，并在 `_connectToAP()` 失败时调用
+3. 修改 `Shared_GlobalDefines.h` - 版本号从V1.39递增到V1.40
+
+#### 关键代码变更
+- `WiFi_WiFiConnector.cpp`：
+  ```cpp
+  void WiFiConnector::_resetWiFiHardware() {
+      Utils_Logger::info("[WiFiConn] Resetting WiFi hardware...");
+      wifi_config_autoreconnect(0, 0, 0);
+      WiFi.disconnect();
+      delay(500);
+      wifi_off();
+      delay(500);
+      wifi_on();
+      delay(1000);
+      Utils_Logger::info("[WiFiConn] WiFi hardware reset complete");
+  }
+  ```
+- `_connectToAP()` 失败时调用：`_resetWiFiHardware()` 而非直接返回
+
+---
+
+### 版本 V1.39 - USB MSC模式退出对话框交互功能实现 (2026-04-19)
+
+#### 问题描述
+1. **USB模式退出交互缺失**：根据需求文档，在进入USB MSC模式后，旋转旋钮应显示"退出"对话框，但该交互功能尚未实现
+2. **中文字符显示异常**：退出对话框中的"返回"和"确认"中文字符使用GB2312编码直接输出，无法在TFT屏幕上正确渲染
+3. **退出后返回主菜单位置错误**：退出USB模式后未正确返回主菜单，三角形指示器未指向选项E
+
+#### 解决要点
+1. 修改`USB_MassStorageModule::handleRotation()`：旋转旋钮时，若退出对话框未显示则弹出对话框，若已显示则切换"返回"/"确认"选项
+2. 修改`USB_MassStorageModule::handleButton()`：在退出对话框中，选择"返回"时关闭对话框恢复USB模式显示，选择"确认"时执行退出操作
+3. 使用`Display_font16x16.h`中的字体索引常量（FONT16_IDX_FAN2/FONT16_IDX_HUI2/FONT16_IDX_QUE2/FONT16_IDX_REN2）替代GB2312编码，通过`FontRenderer::drawChineseString()`正确渲染中文
+4. 在`USB_MassStorageModule::exit()`中重置状态标志释放USB资源（注意：`USBDeinit()`因SDK中`_usb_deinit()`符号未导出导致链接错误，暂不调用）
+5. 在`MenuContext`中新增`returnFromUsbMode()`方法，退出USB模式后返回主菜单并将三角形指示器定位到选项E（POSITION_E）
+6. 修改编码器按钮回调`handleEncoderButton()`，在USB模块退出后调用`returnFromUsbMode()`
+7. 版本号从V1.38递增到V1.39
+
+#### 实施步骤
+1. 修改 `USB_MassStorageModule.h` - 添加`#include "Display_font16x16.h"`、`isExitConfirmed()`方法和`m_exitConfirmed`成员变量
+2. 修改 `USB_MassStorageModule.cpp` - 重构核心交互逻辑：
+   - `handleRotation()`：首次旋转弹出退出对话框，再次旋转切换选项
+   - `handleButton()`：处理对话框中的按钮选择逻辑
+   - `showExitDialog()`/`updateExitDialogDisplay()`：使用字体索引渲染中文
+   - `exit()`：重置状态标志释放资源并设置退出标志
+3. 修改 `Menu_MenuContext.h` - 添加`returnFromUsbMode()`方法声明
+4. 修改 `Menu_MenuContext.cpp` - 实现`returnFromUsbMode()`方法，修改编码器按钮回调处理USB退出
+5. 修改 `Shared_GlobalDefines.h` - 版本号从V1.38递增到V1.39
+
+#### 关键代码变更
+- `USB_MassStorageModule.cpp`：使用`static const uint8_t strUsdBack[] = {FONT16_IDX_FAN2, FONT16_IDX_HUI2, 0}`定义中文字体索引数组
+- `Menu_MenuContext.cpp`：在`handleEncoderButton()`中添加`if (usbMassStorageModule.isExitConfirmed()) { menuContext.returnFromUsbMode(); }`
+- `MenuContext::returnFromUsbMode()`：调用`triangleController.moveToPosition(TriangleController::POSITION_E)`定位三角形到选项E
+
+---
+
 ### 版本 V1.38 - BLE WiFi配网功能与OTA WiFi连接策略重构 (2026-04-15)
 
 #### 问题描述

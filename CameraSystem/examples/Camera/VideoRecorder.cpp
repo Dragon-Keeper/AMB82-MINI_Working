@@ -184,29 +184,8 @@ static int JPEGDrawForPreview(JPEGDRAW *pDraw) {
     return 1;
 }
 
-// DS1307时钟读取函数
-void readDS1307Time(DS1307_Time& time) {
-    static unsigned long lastErrorTime = 0;
-    static bool hasReportedError = false;
-    
-    if (!clockModule.readTime(time)) {
-        // 只在第一次失败或间隔10秒后才报告错误
-        unsigned long currentTime = millis();
-        if (!hasReportedError || (currentTime - lastErrorTime > 10000)) {
-            Utils_Logger::error("Failed to read time from DS1307");
-            hasReportedError = true;
-            lastErrorTime = currentTime;
-        }
-        // 设置默认时间
-        time = {0, 0, 0, 1, 1, 1, 2026};
-    } else {
-        // 读取成功时重置错误状态
-        hasReportedError = false;
-    }
-}
-
 // 格式化时间戳
-void formatTimeStamp(char* buffer, uint32_t bufferSize, const DS1307_Time& time) {
+void formatTimeStamp(char* buffer, uint32_t bufferSize, const DS3231_Time& time) {
     snprintf(buffer, bufferSize, "%04u-%02u-%02u %02u:%02u:%02u",
              time.year, time.month, time.date,
              time.hours, time.minutes, time.seconds);
@@ -218,12 +197,12 @@ void videoRecorderInit(void) {
     // 串口初始化
     Serial.begin(115200);
     
-    // DS1307时钟模块初始化
-    // Utils_Logger::info("Initializing DS1307 Clock Module...");
+    // DS3231时钟模块初始化
+    // Utils_Logger::info("Initializing DS3231 Clock Module...");
     
-    // 系统上电后立即读取一次DS1307时间，确保时间戳可用
-    DS1307_Time initialTime;
-    readDS1307Time(initialTime);
+    // 系统上电后立即读取一次DS3231时间，确保时间戳可用
+    DS3231_Time initialTime;
+    readDS3231Time(initialTime);
     
     // 音视频采集引脚初始化
     // Utils_Logger::info("Initializing Audio/Video Pins...");
@@ -335,9 +314,9 @@ void startVideoRecording(void) {
         // Utils_Logger::info("Audio processing RTOS task created (priority 4)");
     }
     
-    // 读取DS1307获取录制开始时间戳
-    DS1307_Time startTime;
-    readDS1307Time(startTime);
+    // 读取DS3231获取录制开始时间戳
+    DS3231_Time startTime;
+    readDS3231Time(startTime);
     
     // 打印开始录制日志
     char timeStamp[32];
@@ -375,9 +354,9 @@ void stopVideoRecording(void) {
     // 停止音频采集
     g_microphoneManager.stopAVIRecording();
     
-    // 读取DS1307获取录制结束时间戳（在停止MJPEG录制前获取，确保时间戳准确）
-    DS1307_Time endTime;
-    readDS1307Time(endTime);
+    // 读取DS3231获取录制结束时间戳（在停止MJPEG录制前获取，确保时间戳准确）
+    DS3231_Time endTime;
+    readDS3231Time(endTime);
     
     // 停止MJPEG录制并传递时间参数（这样在文件写入时会自动设置时间戳）
     mjpegEncoder.end(&endTime);
@@ -528,7 +507,7 @@ uint8_t* currentImageBuffer = nullptr;
 uint32_t currentImageSize = 0;
 
 // 外部变量声明
-extern DS1307_ClockModule clockModule;
+extern DS3231_ClockModule clockModule;
 extern SDCardManager sdCardManager;
 extern Display_TFTManager tftManager;
 extern JPEGDEC jpeg;

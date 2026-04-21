@@ -13,6 +13,11 @@
 #include "OTA.h"
 #include <WiFi.h>
 #include "wifi_conf.h"
+#include "DS3231_ClockModule.h"
+#include "Shared_SharedResources.h"
+
+extern DS3231_ClockModule clockModule;
+extern TimeSyncTaskStatus g_timeSyncStatus;
 
 static const uint8_t strConfirmReboot[] = {FONT16_IDX_QUE2, FONT16_IDX_REN2, FONT16_IDX_CHONG, FONT16_IDX_QI3, 0};
 static const uint8_t strBack[]          = {FONT16_IDX_FAN2, FONT16_IDX_HUI2, 0};
@@ -23,6 +28,9 @@ static const uint8_t strConfirmOta[]    = {FONT16_IDX_QUE2, FONT16_IDX_REN2, FON
 static const uint8_t strConfirmExit[]   = {FONT16_IDX_QUE2, FONT16_IDX_REN2, 0};
 static const uint8_t strOta[]           = {FONT16_IDX_SHENG2, FONT16_IDX_JI2, 0};
 static const uint8_t strOtaProgress[]   = {FONT16_IDX_SHENG2, FONT16_IDX_JI2, FONT16_IDX_ZHONG2, 0};
+static const uint8_t strConfirm[]       = {FONT16_IDX_QUE2, FONT16_IDX_REN2, 0};
+static const uint8_t strSetIp[]        = {FONT16_IDX_SHE2, FONT16_IDX_ZHI2, 0};
+static const uint8_t strTransferMode[]  = {FONT16_IDX_CHUAN2, FONT16_IDX_SHU3, FONT16_IDX_MO2, FONT16_IDX_SHI8, 0};
 
 // 前向声明全局菜单上下文对象
 extern MenuContext menuContext;
@@ -67,9 +75,13 @@ void handleEncoderRotation(RotationDirection direction) {
                     menuContext.showOtaConfirmDialog();
                     break;
                 }
-                // 如果在OTA服务器IP配置界面中，处理字段数值调整
+                // 如果在OTA服务器IP选择界面中，处理选项切换
                 if (menuContext.isInOtaIpConfig()) {
-                    menuContext.handleOtaIpRotation(direction);
+                    if (menuContext.isInOtaIpSelectState()) {
+                        menuContext.handleOtaIpSelectRotation(direction);
+                    } else {
+                        menuContext.handleOtaIpRotation(direction);
+                    }
                     break;
                 }
                 // 如果在OTA升级中界面退出对话框已显示，处理对话框选项切换
@@ -86,17 +98,43 @@ void handleEncoderRotation(RotationDirection direction) {
                 if (menuContext.isInOtaProgress()) {
                     break;
                 }
-                // 如果在BLE WiFi配网界面中，忽略旋转事件
+                // 如果在BLE WiFi配网界面中，处理退出对话框
                 if (menuContext.isInBleWifiConfig()) {
+                    menuContext.handleBleExitRotation(direction);
+                    break;
+                }
+                // 如果在USB MSC模式中，委托给USB模块处理
+                if (usbMassStorageModule.isRunning()) {
+                    usbMassStorageModule.handleRotation(direction);
+                    break;
+                }
+                // 如果在传输模式选择界面中，处理选项切换
+                if (menuContext.isInTransferModeSelect()) {
+                    menuContext.handleTransferModeSelectRotation(direction);
+                    break;
+                }
+                // 如果在时间同步窗口中，旋转旋钮关闭窗口返回子菜单
+                if (menuContext.isInTimeSyncWindow()) {
+                    Utils_Logger::info("时间同步窗口：旋转旋钮 - 关闭窗口返回子菜单");
+                    menuContext.hideTimeSyncWindow();
+                    menuContext.showMenu();
                     break;
                 }
                 // 菜单模式：使用MenuContext处理旋转事件
                 if (direction == ROTATION_CW) {
+                    bool wasPosA = (menuContext.getCurrentMenuItem() == POS_A);
                     menuContext.handleEvent(MENU_EVENT_DOWN);
                     Utils_Logger::info("菜单：编码器旋转: 顺时针（向下移动菜单项）");
+                    if (wasPosA && menuContext.getCurrentMenuItem() != POS_A && !menuContext.isInTimeSyncWindow()) {
+                        menuContext.resetTimeSyncButtonHandled();
+                    }
                 } else if (direction == ROTATION_CCW) {
+                    bool wasPosA = (menuContext.getCurrentMenuItem() == POS_A);
                     menuContext.handleEvent(MENU_EVENT_UP);
                     Utils_Logger::info("菜单：编码器旋转: 逆时针（向上移动菜单项）");
+                    if (wasPosA && menuContext.getCurrentMenuItem() != POS_A && !menuContext.isInTimeSyncWindow()) {
+                        menuContext.resetTimeSyncButtonHandled();
+                    }
                 }
                 Utils_Logger::info("菜单当前位置: %c", (char)('A' + menuContext.getCurrentMenuItem()));
                 break;
@@ -144,6 +182,32 @@ void handleEncoderButton() {
             Utils_Logger::info("[OTA_EXIT] OTA升级中界面：显示退出确认对话框");
             menuContext.showOtaProgressExitDialog();
         }
+        return;
+    }
+
+    // 如果在USB MSC模式中，委托给USB模块处理
+    if (usbMassStorageModule.isRunning()) {
+        usbMassStorageModule.handleButton();
+        if (usbMassStorageModule.isExitConfirmed()) {
+            menuContext.returnFromUsbMode();
+        }
+        return;
+    }
+
+    // 如果在BLE WiFi配网界面中，处理退出确认逻辑
+    if (menuContext.isInBleWifiConfig()) {
+        if (menuContext.isBleExitDialogShown()) {
+            menuContext.handleBleExitButton();
+        } else {
+            menuContext.showBleExitDialog();
+        }
+        return;
+    }
+
+    // 如果在传输模式选择界面中，处理选择确认
+    if (menuContext.isInTransferModeSelect()) {
+        Utils_Logger::info("[TRANSFER] 传输模式选择：处理按钮确认");
+        menuContext.handleTransferModeSelectButton();
         return;
     }
 
@@ -198,7 +262,14 @@ bool MenuContext::init() {
     // 初始化参数设置菜单
     paramSettingsMenu = new ParamSettingsMenu(tftManager, fontRenderer);
     paramSettingsMenu->init();
-    
+
+    // 初始化USB MSC模块
+    if (!usbMassStorageModule.init(tftManager, fontRenderer)) {
+        Utils_Logger::error("[MenuContext] USB MSC模块初始化失败");
+        return false;
+    }
+    Utils_Logger::info("[MenuContext] USB MSC模块初始化成功");
+
     // 显示初始菜单
     showMenu();
     
@@ -405,19 +476,22 @@ void MenuContext::showMenu() {
         Utils_Logger::error("[MenuContext] 未初始化");
         return;
     }
-    
+
     // 如果在参数设置菜单中，不显示常规菜单
     if (inParamSettings && paramSettingsMenu != nullptr) {
         Utils_Logger::info("[MenuContext] 参数设置菜单模式，不显示常规菜单");
         return;
     }
-    
+
+    // 重置时间同步窗口按钮处理标志，允许下次按压打开窗口
+    timeSyncButtonHandled = false;
+
     // 显示当前菜单页面
     menuManager.showCurrentMenu();
-    
+
     // 更新三角形光标显示
     triangleController.updateDisplay();
-    
+
     Utils_Logger::info("[MenuContext] 菜单显示完成");
 }
 
@@ -520,7 +594,11 @@ void MenuContext::handleSubMenu() {
     if (isInOtaIpConfig()) {
         if (StateManager::getInstance().isButtonPressDetected()) {
             StateManager::getInstance().setButtonPressDetected(false);
-            handleOtaIpButton();
+            if (isInOtaIpSelectState()) {
+                handleOtaIpSelectButton();
+            } else {
+                handleOtaIpButton();
+            }
         }
         return;
     }
@@ -529,8 +607,11 @@ void MenuContext::handleSubMenu() {
     if (inBleWifiConfig) {
         if (StateManager::getInstance().isButtonPressDetected()) {
             StateManager::getInstance().setButtonPressDetected(false);
-            Utils_Logger::info("[BLE_WIFI] 检测到按钮按下，停止BLE配网");
-            stopBleWifiConfig();
+            if (bleExitDialogShown) {
+                handleBleExitButton();
+            } else {
+                showBleExitDialog();
+            }
         }
         return;
     }
@@ -551,20 +632,22 @@ void MenuContext::handleSubMenu() {
             inRebootConfirm = true;
             showRebootConfirmDialog();
         } else if (getCurrentMenuItem() == POS_A) {
-            // A位置按下：启动校对时间功能
-            Utils_Logger::info("子菜单A位置：启动校对时间功能");
-
-            // 检查任务状态，如果不是删除状态，就标记为删除状态
-            if (TaskManager::getTaskState(TaskManager::TASK_TIME_SYNC) != TASK_STATE_DELETED) {
-                Utils_Logger::info("将现有任务标记为删除状态");
-                TaskManager::markTaskAsDeleting(TaskManager::TASK_TIME_SYNC);
-            }
-
-            // 创建新任务
-            if (TaskFactory::createDefaultTask(TaskManager::TASK_TIME_SYNC)) {
-                Utils_Logger::info("校对时间任务启动成功");
-            } else {
-                Utils_Logger::error("校对时间任务启动失败");
+            if (inTimeSyncWindow) {
+                Utils_Logger::info("子菜单A位置：关闭时间同步窗口");
+                hideTimeSyncWindow();
+                showMenu();
+            } else if (!timeSyncButtonHandled) {
+                timeSyncButtonHandled = true;
+                Utils_Logger::info("子菜单A位置：打开时间同步窗口");
+                showTimeSyncWindow();
+                if (TaskManager::getTaskState(TaskManager::TASK_TIME_SYNC) != TASK_STATE_DELETED) {
+                    TaskManager::markTaskAsDeleting(TaskManager::TASK_TIME_SYNC);
+                }
+                if (TaskFactory::createDefaultTask(TaskManager::TASK_TIME_SYNC)) {
+                    Utils_Logger::info("校对时间任务启动成功");
+                } else {
+                    Utils_Logger::error("校对时间任务启动失败");
+                }
             }
         } else if (getCurrentMenuItem() == POS_C) {
             Utils_Logger::info("子菜单C位置：启动BLE WiFi配网");
@@ -973,7 +1056,8 @@ void MenuContext::handleOtaProgressExitButton() {
 void MenuContext::showOtaIpConfig() {
     Utils_Logger::info("[OTA_IP] 进入服务器IP配置界面");
 
-    otaIpState = OTA_IP_STATE_FIELD_1;
+    otaIpState = OTA_IP_STATE_SELECT;
+    otaIpSelectDefaultConfirm = true;
 
     tftManager.fillScreen(ST7789_BLACK);
 
@@ -983,11 +1067,23 @@ void MenuContext::showOtaIpConfig() {
     tftManager.print("OTA Server IP Config");
 
     tftManager.setCursor(40, 60);
-    tftManager.print("Rotate: +/-1");
-    tftManager.setCursor(40, 75);
-    tftManager.print("Press: Confirm field");
+    tftManager.print("1. ");
+    fontRenderer.drawChineseString(70, 60, strConfirm, ST7789_WHITE, ST7789_BLACK);
 
-    updateOtaIpDisplay();
+    tftManager.setCursor(40, 90);
+    tftManager.print("2. ");
+    fontRenderer.drawChineseString(70, 90, strSetIp, ST7789_WHITE, ST7789_BLACK);
+
+    tftManager.setCursor(40, 120);
+    tftManager.print("192.168.1.50");
+
+    tftManager.setCursor(40, 180);
+    tftManager.setTextColor(ST7789_GRAY, ST7789_BLACK);
+    tftManager.print("Rotate: Select option");
+    tftManager.setCursor(40, 195);
+    tftManager.print("Press: Confirm");
+
+    updateOtaIpSelectDisplay();
 }
 
 void MenuContext::updateOtaIpDisplay() {
@@ -1032,6 +1128,84 @@ void MenuContext::updateOtaIpDisplay() {
     char fieldNumBuf[8];
     sprintf(fieldNumBuf, "%d/4", (int)(otaIpState - OTA_IP_STATE_FIELD_1 + 1));
     tftManager.print(fieldNumBuf);
+}
+
+void MenuContext::updateOtaIpSelectDisplay() {
+    tftManager.fillRectangle(35, 55, 200, 80, ST7789_BLACK);
+
+    if (otaIpSelectDefaultConfirm) {
+        tftManager.setCursor(35, 60);
+        tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+        tftManager.print(">");
+        tftManager.setCursor(70, 60);
+        fontRenderer.drawChineseString(70, 60, strConfirm, ST7789_YELLOW, ST7789_BLACK);
+
+        tftManager.setCursor(70, 90);
+        tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+        fontRenderer.drawChineseString(70, 90, strSetIp, ST7789_WHITE, ST7789_BLACK);
+    } else {
+        tftManager.setCursor(35, 60);
+        tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+        tftManager.print(">");
+        tftManager.setCursor(70, 60);
+        fontRenderer.drawChineseString(70, 60, strConfirm, ST7789_WHITE, ST7789_BLACK);
+
+        tftManager.setCursor(35, 90);
+        tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+        tftManager.print(">");
+        tftManager.setCursor(70, 90);
+        fontRenderer.drawChineseString(70, 90, strSetIp, ST7789_YELLOW, ST7789_BLACK);
+    }
+}
+
+void MenuContext::handleOtaIpSelectRotation(RotationDirection direction) {
+    if (otaIpState != OTA_IP_STATE_SELECT) {
+        return;
+    }
+
+    if (direction == ROTATION_CW) {
+        otaIpSelectDefaultConfirm = false;
+    } else if (direction == ROTATION_CCW) {
+        otaIpSelectDefaultConfirm = true;
+    }
+
+    Utils_Logger::info("[OTA_IP] 选择界面切换: %s", otaIpSelectDefaultConfirm ? "确认" : "手动设置");
+
+    updateOtaIpSelectDisplay();
+}
+
+void MenuContext::handleOtaIpSelectButton() {
+    if (otaIpState != OTA_IP_STATE_SELECT) {
+        return;
+    }
+
+    Utils_Logger::info("[OTA_IP] 确认选择: %s", otaIpSelectDefaultConfirm ? "确认(默认IP)" : "手动设置");
+
+    if (otaIpSelectDefaultConfirm) {
+        sprintf(otaServerIpStr, "%d.%d.%d.%d", otaServerIp[0], otaServerIp[1], otaServerIp[2], otaServerIp[3]);
+        Utils_Logger::info("[OTA_IP] 使用默认IP: %s", otaServerIpStr);
+        otaIpState = OTA_IP_STATE_SUBMITTED;
+        tftManager.fillScreen(ST7789_BLACK);
+        tftManager.setTextColor(ST7789_GREEN, ST7789_BLACK);
+        tftManager.setCursor(60, 100);
+        tftManager.print("Using IP:");
+        tftManager.setCursor(60, 130);
+        tftManager.print(otaServerIpStr);
+        delay(1500);
+        executeOTA();
+    } else {
+        otaIpState = OTA_IP_STATE_FIELD_1;
+        tftManager.fillScreen(ST7789_BLACK);
+        tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+        tftManager.setTextSize(1);
+        tftManager.setCursor(30, 30);
+        tftManager.print("OTA Server IP Config");
+        tftManager.setCursor(40, 60);
+        tftManager.print("Rotate: +/-1");
+        tftManager.setCursor(40, 75);
+        tftManager.print("Press: Confirm field");
+        updateOtaIpDisplay();
+    }
 }
 
 void MenuContext::handleOtaIpRotation(RotationDirection direction) {
@@ -1160,6 +1334,29 @@ void MenuContext::executeOTA() {
 
         // 步骤1: 尝试Force和Tiger
         for (int i = 0; i < 2; i++) {
+            Utils_Logger::info("[OTA] 扫描WiFi网络检查SSID: %s", knownSSIDs[i]);
+            int scanCount = WiFi.scanNetworks();
+            bool ssidExists = false;
+            if (scanCount >= 0) {
+                for (int s = 0; s < scanCount; s++) {
+                    if (strcmp(WiFi.SSID(s), knownSSIDs[i]) == 0) {
+                        ssidExists = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!ssidExists) {
+                Utils_Logger::info("[OTA] SSID %s 不存在，跳过连接", knownSSIDs[i]);
+                tftManager.setTextColor(ST7789_GRAY, ST7789_BLACK);
+                tftManager.setCursor(50, 210);
+                tftManager.print(knownSSIDs[i]);
+                tftManager.print(" not found   ");
+                delay(500);
+                continue;
+            }
+            Utils_Logger::info("[OTA] SSID %s 存在，准备连接", knownSSIDs[i]);
+
             for (int retry = 0; retry < 3; retry++) {
                 Utils_Logger::info("[OTA] 尝试连接 %s (%d/3)", knownSSIDs[i], retry + 1);
 
@@ -1187,7 +1384,6 @@ void MenuContext::executeOTA() {
                     connectRetry++;
                 }
 
-                // 阶段4: 每次连接后验证IP第3段是否与服务器IP匹配
                 if (WiFi.status() == WL_CONNECTED) {
                     IPAddress ip = WiFi.localIP();
                     if (ip[2] == otaServerIp[2]) {
@@ -1471,6 +1667,28 @@ void MenuContext::executeBleWifiConfig()
     const char* knownPasswords[] = {"dd123456", "Dt5201314"};
 
     for (int i = 0; i < 2; i++) {
+        Utils_Logger::info("[BLE_WIFI] 扫描WiFi网络检查SSID: %s", knownSSIDs[i]);
+        int scanCount = WiFi.scanNetworks();
+        bool ssidExists = false;
+        if (scanCount >= 0) {
+            for (int s = 0; s < scanCount; s++) {
+                if (strcmp(WiFi.SSID(s), knownSSIDs[i]) == 0) {
+                    ssidExists = true;
+                    break;
+                }
+            }
+        }
+
+        if (!ssidExists) {
+            Utils_Logger::info("[BLE_WIFI] SSID %s 不存在，跳过连接", knownSSIDs[i]);
+            char skipMsg[32];
+            sprintf(skipMsg, "%s not found", knownSSIDs[i]);
+            showBleWifiConfigScreen(skipMsg);
+            delay(500);
+            continue;
+        }
+        Utils_Logger::info("[BLE_WIFI] SSID %s 存在，准备连接", knownSSIDs[i]);
+
         for (int retry = 0; retry < 3; retry++) {
             if (!bleWifiConfigActive) {
                 inBleWifiConfig = false;
@@ -1665,7 +1883,7 @@ void MenuContext::executeBleWifiConfig()
         }
 
         unsigned long elapsed = millis() - bleStartTime;
-        if (elapsed % 5000 < 500) {
+        if (elapsed % 5000 < 500 && !bleExitDialogShown) {
             char statusMsg[32];
             sprintf(statusMsg, "BLE Waiting... %lus", (bleTimeout - elapsed) / 1000);
             showBleWifiConfigScreen(statusMsg);
@@ -1673,9 +1891,17 @@ void MenuContext::executeBleWifiConfig()
 
         if (StateManager::getInstance().isButtonPressDetected()) {
             StateManager::getInstance().setButtonPressDetected(false);
-            Utils_Logger::info("[BLE_WIFI] 用户按下按钮，停止BLE配网");
-            stopBleWifiConfig();
+            Utils_Logger::info("[BLE_WIFI] 用户按下按钮，显示退出确认对话框");
+            showBleExitDialog();
+        }
+
+        if (!bleWifiConfigActive) {
             return;
+        }
+
+        if (bleExitDialogShown) {
+            delay(100);
+            continue;
         }
 
         delay(200);
@@ -1695,6 +1921,10 @@ void MenuContext::executeBleWifiConfig()
 
 void MenuContext::showBleWifiConfigScreen(const char* statusMsg)
 {
+    if (bleExitDialogShown) {
+        return;
+    }
+
     tftManager.fillScreen(ST7789_BLACK);
 
     tftManager.setTextColor(ST7789_CYAN, ST7789_BLACK);
@@ -1721,9 +1951,227 @@ void MenuContext::showBleWifiConfigScreen(const char* statusMsg)
     tftManager.print("Press btn to cancel");
 }
 
+const char* MenuContext::getTimeSyncStateText(TimeSyncState state) {
+    switch (state) {
+        case TIME_SYNC_IDLE:           return "Idle";
+        case TIME_SYNC_CONNECTING_WIFI: return "Connecting WiFi...";
+        case TIME_SYNC_CONNECTED_WIFI:  return "WiFi Connected";
+        case TIME_SYNC_NTP_INIT:        return "NTP Initializing...";
+        case TIME_SYNC_NTP_SYNCING:     return "Syncing NTP...";
+        case TIME_SYNC_NTP_SUCCESS:     return "NTP Sync Success";
+        case TIME_SYNC_NTP_FAILED:      return "NTP Sync Failed";
+        case TIME_SYNC_UPDATING_DS3231: return "Updating RTC...";
+        case TIME_SYNC_COMPLETE:        return "Sync Complete";
+        case TIME_SYNC_DISCONNECTING:   return "Disconnecting...";
+        default:                        return "Unknown";
+    }
+}
+
+void MenuContext::setTimeSyncState(TimeSyncState state, const char* status, int progress, const char* server) {
+    timeSyncState = state;
+    if (status) {
+        strncpy(timeSyncStatus, status, sizeof(timeSyncStatus) - 1);
+        timeSyncStatus[sizeof(timeSyncStatus) - 1] = '\0';
+    }
+    timeSyncProgress = progress;
+    if (server) {
+        strncpy(timeSyncServer, server, sizeof(timeSyncServer) - 1);
+        timeSyncServer[sizeof(timeSyncServer) - 1] = '\0';
+    }
+}
+
+void MenuContext::showTimeSyncWindow() {
+    inTimeSyncWindow = true;
+    timeSyncState = TIME_SYNC_IDLE;
+    timeSyncProgress = 0;
+    strcpy(timeSyncStatus, "Initializing...");
+    strcpy(timeSyncServer, "-");
+    timeSyncStartTime = millis();
+
+    g_timeSyncStatus.state = TIME_SYNC_IDLE;
+    g_timeSyncStatus.progress = 0;
+    strcpy(g_timeSyncStatus.status, "Initializing...");
+    strcpy(g_timeSyncStatus.server, "-");
+    g_timeSyncStatus.updated = false;
+
+    tftManager.fillScreen(ST7789_BLACK);
+
+    tftManager.setTextColor(ST7789_CYAN, ST7789_BLACK);
+    tftManager.setTextSize(2);
+    tftManager.setCursor(70, 15);
+    tftManager.print("Time Sync");
+
+    tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+    tftManager.setTextSize(2);
+    tftManager.setCursor(80, 50);
+    tftManager.print("00:00:00");
+
+    tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+    tftManager.setTextSize(1);
+    tftManager.setCursor(50, 85);
+    tftManager.print("----------------------");
+
+    tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+    tftManager.setCursor(50, 100);
+    tftManager.print("State: ");
+    tftManager.print(timeSyncStatus);
+
+    tftManager.setCursor(50, 120);
+    tftManager.print("Server: ");
+    tftManager.print(timeSyncServer);
+
+    tftManager.setCursor(50, 140);
+    tftManager.print("Progress: ");
+    tftManager.fillRectangle(100, 138, 80, 16, ST7789_BLACK);
+    tftManager.setCursor(115, 140);
+    char progStr[8];
+    sprintf(progStr, "%d%%", timeSyncProgress);
+    tftManager.print(progStr);
+
+    tftManager.fillRectangle(50, 155, 220, 12, ST7789_GRAY);
+    tftManager.fillRectangle(50, 155, 220 * timeSyncProgress / 100, 12, ST7789_GREEN);
+
+    tftManager.setCursor(50, 175);
+    tftManager.setTextColor(ST7789_GRAY, ST7789_BLACK);
+    tftManager.print("Press switch to close");
+
+    updateTimeSyncWindow();
+}
+
+void MenuContext::hideTimeSyncWindow() {
+    inTimeSyncWindow = false;
+    timeSyncButtonHandled = false;
+}
+
+void MenuContext::updateTimeSyncWindow() {
+    DS3231_Time dsTime;
+    if (clockModule.readTime(dsTime)) {
+        char timeStr[16];
+        sprintf(timeStr, "%02d:%02d:%02d", dsTime.hours, dsTime.minutes, dsTime.seconds);
+        strncpy(currentTimeStr, timeStr, sizeof(currentTimeStr) - 1);
+
+        tftManager.fillRectangle(78, 48, 140, 20, ST7789_BLACK);
+        tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+        tftManager.setTextSize(2);
+        tftManager.setCursor(80, 50);
+        tftManager.print(timeStr);
+        tftManager.setTextSize(1);
+    }
+
+    timeSyncState = g_timeSyncStatus.state;
+    strncpy(timeSyncStatus, g_timeSyncStatus.status, sizeof(timeSyncStatus) - 1);
+    timeSyncProgress = g_timeSyncStatus.progress;
+    strncpy(timeSyncServer, g_timeSyncStatus.server, sizeof(timeSyncServer) - 1);
+
+    tftManager.fillRectangle(95, 98, 200, 16, ST7789_BLACK);
+    tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+    tftManager.setCursor(95, 100);
+    tftManager.print(timeSyncStatus);
+
+    tftManager.fillRectangle(108, 118, 180, 16, ST7789_BLACK);
+    tftManager.setCursor(108, 120);
+    tftManager.print(timeSyncServer);
+
+    tftManager.fillRectangle(100, 138, 80, 16, ST7789_BLACK);
+    tftManager.setCursor(115, 140);
+    char progStr[8];
+    sprintf(progStr, "%d%%", timeSyncProgress);
+    tftManager.print(progStr);
+
+    tftManager.fillRectangle(50, 155, 220, 12, ST7789_GRAY);
+    uint16_t progressColor = (timeSyncState == TIME_SYNC_COMPLETE) ? ST7789_GREEN :
+                             (timeSyncState == TIME_SYNC_NTP_FAILED) ? ST7789_RED : ST7789_GREEN;
+    tftManager.fillRectangle(50, 155, 220 * timeSyncProgress / 100, 12, progressColor);
+}
+
 void MenuContext::updateBleWifiConfigDisplay()
 {
-    // Reserved for future async display updates
+}
+
+void MenuContext::showBleExitDialog()
+{
+    Utils_Logger::info("[BLE_EXIT] 显示BLE配网退出确认对话框");
+    bleExitDialogShown = true;
+    bleExitDefaultBack = true;
+
+    const int screenWidth = 320;
+    const int screenHeight = 240;
+
+    const int dialogWidth = 220;
+    const int dialogHeight = 100;
+    const int dialogX = (screenWidth - dialogWidth) / 2;
+    const int dialogY = (screenHeight - dialogHeight) / 2;
+
+    tftManager.fillRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_BLACK);
+    tftManager.drawRectangle(dialogX, dialogY, dialogWidth, dialogHeight, ST7789_WHITE);
+
+    const int titleY = dialogY + 20;
+    tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+    tftManager.setCursor(dialogX + 55, titleY);
+    tftManager.print("Exit BLE WiFi?");
+
+    const int btnY = dialogY + 55;
+    const int btnAreaWidth = dialogWidth - 20;
+    const int backBtnWidth = fontRenderer.getStringLength(strBack) * 16;
+    const int confirmBtnWidth = fontRenderer.getStringLength(strConfirmExit) * 16;
+    const int totalBtnWidth = backBtnWidth + 20 + confirmBtnWidth;
+    const int btnStartX = dialogX + (btnAreaWidth - totalBtnWidth) / 2;
+
+    const int backTextX = btnStartX + backBtnWidth;
+    const int confirmTextX = backTextX + 20 + confirmBtnWidth;
+
+    if (bleExitDefaultBack) {
+        tftManager.setCursor(btnStartX - 12, btnY);
+        tftManager.setTextColor(ST7789_YELLOW);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(btnStartX, btnY, strBack, ST7789_YELLOW, ST7789_BLACK);
+
+        tftManager.setCursor(backTextX + 8, btnY);
+        tftManager.setTextColor(ST7789_WHITE);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(confirmTextX, btnY, strConfirmExit, ST7789_WHITE, ST7789_BLACK);
+    } else {
+        tftManager.setCursor(btnStartX - 12, btnY);
+        tftManager.setTextColor(ST7789_WHITE);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(btnStartX, btnY, strBack, ST7789_WHITE, ST7789_BLACK);
+
+        tftManager.setCursor(backTextX + 8, btnY);
+        tftManager.setTextColor(ST7789_YELLOW);
+        tftManager.print(">");
+        fontRenderer.drawChineseString(confirmTextX, btnY, strConfirmExit, ST7789_YELLOW, ST7789_BLACK);
+    }
+}
+
+void MenuContext::handleBleExitRotation(RotationDirection direction)
+{
+    if (!inBleWifiConfig) return;
+
+    if (bleExitDialogShown) {
+        bleExitDefaultBack = !bleExitDefaultBack;
+        showBleExitDialog();
+    } else {
+        showBleExitDialog();
+    }
+}
+
+void MenuContext::handleBleExitButton()
+{
+    if (!inBleWifiConfig) return;
+
+    Utils_Logger::info("[BLE_EXIT] handleBleExitButton 被调用");
+
+    if (bleExitDefaultBack) {
+        Utils_Logger::info("[BLE_EXIT] 用户选择返回，继续BLE配网");
+        bleExitDialogShown = false;
+        bleExitDefaultBack = true;
+        showBleWifiConfigScreen("Configuring...");
+    } else {
+        Utils_Logger::info("[BLE_EXIT] 用户选择确认，退出BLE配网");
+        bleExitDialogShown = false;
+        bleExitDefaultBack = true;
+        stopBleWifiConfig();
+    }
 }
 
 void MenuContext::stopBleWifiConfig()
@@ -1744,7 +2192,173 @@ void MenuContext::stopBleWifiConfig()
     delay(500);
 
     inBleWifiConfig = false;
+    bleExitDialogShown = false;
+    bleExitDefaultBack = true;
 
     showMenu();
     triangleController.moveToPosition(TriangleController::POSITION_C);
+}
+
+void MenuContext::showTransferModeSelect() {
+    Utils_Logger::info("[TRANSFER] 进入传输模式选择界面");
+
+    inTransferModeSelect = true;
+    transferModeSelectIndex = 0;
+
+    tftManager.fillScreen(ST7789_BLACK);
+
+    int16_t titleX = fontRenderer.calculateCenterPosition(320, strTransferMode);
+    fontRenderer.drawChineseString(titleX, 30, strTransferMode, ST7789_WHITE, ST7789_BLACK);
+
+    const int optionY[3] = {90, 145, 200};
+    const char* labels[3] = {"USB", "WEB", ""};
+    const int triX = 60;
+    const int asciiCharWidth = 16;
+    const int screenWidth = 320;
+
+    for (int i = 0; i < 3; i++) {
+        if (transferModeSelectIndex == i) {
+            tftManager.setCursor(triX, optionY[i]);
+            tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+            tftManager.print(">");
+        } else {
+            tftManager.setCursor(triX, optionY[i]);
+            tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+            tftManager.print(" ");
+        }
+
+        if (i == 2) {
+            int16_t backX = fontRenderer.calculateCenterPosition(320, strBack);
+            if (transferModeSelectIndex == 2) {
+                fontRenderer.drawChineseString(backX, optionY[i], strBack, ST7789_YELLOW, ST7789_BLACK);
+            } else {
+                fontRenderer.drawChineseString(backX, optionY[i], strBack, ST7789_WHITE, ST7789_BLACK);
+            }
+        } else {
+            tftManager.setTextSize(2);
+            int labelLen = strlen(labels[i]);
+            int labelPixelWidth = labelLen * asciiCharWidth;
+            int16_t labelX = (screenWidth - labelPixelWidth) / 2;
+            if (transferModeSelectIndex == i) {
+                tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+            } else {
+                tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+            }
+            tftManager.setCursor(labelX, optionY[i]);
+            tftManager.print(labels[i]);
+            tftManager.setTextSize(1);
+        }
+    }
+}
+
+void MenuContext::updateTransferModeSelectDisplay() {
+    const int optionY[3] = {90, 145, 200};
+    const char* labels[3] = {"USB", "WEB", ""};
+    const int triX = 60;
+    const int asciiCharWidth = 16;
+    const int screenWidth = 320;
+
+    tftManager.fillRectangle(40, 80, 240, 130, ST7789_BLACK);
+
+    for (int i = 0; i < 3; i++) {
+        if (transferModeSelectIndex == i) {
+            tftManager.setCursor(triX, optionY[i]);
+            tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+            tftManager.print(">");
+        } else {
+            tftManager.setCursor(triX, optionY[i]);
+            tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+            tftManager.print(" ");
+        }
+
+        if (i == 2) {
+            int16_t backX = fontRenderer.calculateCenterPosition(320, strBack);
+            if (transferModeSelectIndex == 2) {
+                fontRenderer.drawChineseString(backX, optionY[i], strBack, ST7789_YELLOW, ST7789_BLACK);
+            } else {
+                fontRenderer.drawChineseString(backX, optionY[i], strBack, ST7789_WHITE, ST7789_BLACK);
+            }
+        } else {
+            tftManager.setTextSize(2);
+            int labelLen = strlen(labels[i]);
+            int labelPixelWidth = labelLen * asciiCharWidth;
+            int16_t labelX = (screenWidth - labelPixelWidth) / 2;
+            if (transferModeSelectIndex == i) {
+                tftManager.setTextColor(ST7789_YELLOW, ST7789_BLACK);
+            } else {
+                tftManager.setTextColor(ST7789_WHITE, ST7789_BLACK);
+            }
+            tftManager.setCursor(labelX, optionY[i]);
+            tftManager.print(labels[i]);
+            tftManager.setTextSize(1);
+        }
+    }
+}
+
+void MenuContext::handleTransferModeSelectRotation(RotationDirection direction) {
+    if (!inTransferModeSelect) {
+        return;
+    }
+
+    if (direction == ROTATION_CW) {
+        transferModeSelectIndex = (transferModeSelectIndex + 1) % 3;
+    } else if (direction == ROTATION_CCW) {
+        transferModeSelectIndex = (transferModeSelectIndex + 2) % 3;
+    }
+
+    const char* optionNames[3] = {"USB", "WEB", "返回"};
+    Utils_Logger::info("[TRANSFER] 传输模式切换: %s", optionNames[transferModeSelectIndex]);
+
+    updateTransferModeSelectDisplay();
+}
+
+void MenuContext::handleTransferModeSelectButton() {
+    if (!inTransferModeSelect) {
+        return;
+    }
+
+    const char* optionNames[3] = {"USB", "WEB", "返回"};
+    Utils_Logger::info("[TRANSFER] 确认选择: %s", optionNames[transferModeSelectIndex]);
+
+    inTransferModeSelect = false;
+
+    if (transferModeSelectIndex == 0) {
+        usbMassStorageModule.enter();
+    } else if (transferModeSelectIndex == 1) {
+        Utils_Logger::info("[TRANSFER] 启动WiFi文件服务器...");
+        if (TaskFactory::createDefaultTask(TaskManager::TASK_FUNCTION_E)) {
+            StateManager::getInstance().setCurrentState(STATE_CAMERA_PREVIEW);
+        }
+    } else {
+        Utils_Logger::info("[TRANSFER] 返回主菜单，释放文件传输功能资源...");
+        returnFromTransferMode();
+    }
+}
+
+void MenuContext::returnFromUsbMode() {
+    Utils_Logger::info("[USB_EXIT] 从USB模式返回主菜单");
+
+    StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
+    StateManager::getInstance().setButtonPressDetected(false);
+
+    menuManager.switchToPageByType(MENU_PAGE_MAIN);
+    triangleController.moveToPosition(TriangleController::POSITION_E);
+    showMenu();
+
+    Utils_Logger::info("[USB_EXIT] 已返回主菜单，三角形指向选项E");
+}
+
+void MenuContext::returnFromTransferMode() {
+    Utils_Logger::info("[TRANSFER_EXIT] 从文件传输功能返回主菜单");
+
+    inTransferModeSelect = false;
+
+    StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
+    StateManager::getInstance().setButtonPressDetected(false);
+
+    menuManager.switchToPageByType(MENU_PAGE_MAIN);
+    triangleController.moveToPosition(TriangleController::POSITION_E);
+    showMenu();
+
+    Utils_Logger::info("[TRANSFER_EXIT] 已返回主菜单，三角形指向选项E");
 }

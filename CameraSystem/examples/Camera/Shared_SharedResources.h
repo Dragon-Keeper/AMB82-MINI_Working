@@ -13,6 +13,8 @@
 #include <event_groups.h>
 #include <semphr.h>
 
+#include "Shared_Types.h"
+
 // ===============================================
 // 共享资源声明（外部引用）
 // ===============================================
@@ -76,5 +78,16 @@ extern bool buttonPressDetected;
 // ===============================================
 
 extern uint16_t fontBuffer[16 * 16];
+
+// 时间同步任务状态（任务写入，UI读取）
+struct TimeSyncTaskStatus {
+    volatile TimeSyncState state;
+    char status[64];
+    volatile int progress;
+    char server[32];
+    volatile bool updated;
+};
+extern TimeSyncTaskStatus g_timeSyncStatus;
+void updateTimeSyncStatusFromTask(TimeSyncState state, const char* status, int progress, const char* server);
 
 #endif // SHARED_RESOURCES_H
