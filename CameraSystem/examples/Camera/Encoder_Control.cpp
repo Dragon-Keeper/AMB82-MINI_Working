@@ -64,7 +64,7 @@ bool EncoderControl::init(uint8_t clkPin, uint8_t dtPin, uint8_t swPin)
         delay(10);
     }
     
-    m_initCompleteTime = millis() + 3000;
+    m_initCompleteTime = millis();
     
     digitalSetIrqHandler(m_clkPin, encoderRotation_handler);
     
@@ -75,7 +75,7 @@ bool EncoderControl::init(uint8_t clkPin, uint8_t dtPin, uint8_t swPin)
     m_lastInterruptTime = micros();
     m_lastButtonInterruptTime = micros();
     
-    Utils_Logger::info("编码器引脚配置完成（旋转+按钮中断模式），3秒稳定期");
+    Utils_Logger::info("编码器引脚配置完成（旋转+按钮中断模式）");
     Utils_Logger::info("CLK引脚: %d, DT引脚: %d, SW引脚: %d", m_clkPin, m_dtPin, m_swPin);
     Utils_Logger::info("按钮初始释放状态: %s", m_buttonEverReleased ? "已释放" : "未释放(等待)");
     
@@ -119,8 +119,6 @@ void EncoderControl::setRotationDebounceTime(unsigned long us)
 
 void EncoderControl::checkButton()
 {
-    if (millis() < m_initCompleteTime) return;
-
     bool currentButtonState = digitalRead(m_swPin);
 
     if (currentButtonState == HIGH) {
@@ -201,8 +199,6 @@ void EncoderControl::encoderButton_handler(uint32_t id, uint32_t event)
 
 void EncoderControl::handleRotation()
 {
-    if (millis() < m_initCompleteTime) return;
-    
     unsigned long currentTime = micros();
     
     if (currentTime - m_lastInterruptTime < 100000) {
@@ -224,8 +220,6 @@ void EncoderControl::handleRotation()
 
 void EncoderControl::handleButtonISR()
 {
-    if (millis() < m_initCompleteTime) return;
-    
     if (!m_buttonEverReleased) return;
     
     if (digitalRead(m_swPin) != LOW) return;

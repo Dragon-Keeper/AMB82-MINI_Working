@@ -13,6 +13,7 @@
 #include "MJPEG_Encoder.h"
 #include "Shared_GlobalDefines.h"
 #include "Inmp441_MicrophoneManager.h"
+#include "Max98357a_AudioPlayer.h"
 #include "RTOS_TaskFactory.h"
 #include "RTOS_TaskManager.h"
 
@@ -125,6 +126,15 @@ static bool s_previewFrameReady = false;
 
 static uint16_t s_playbackFrameBuffer[PLAYBACK_FB_WIDTH * PLAYBACK_FB_HEIGHT];
 static bool s_playbackFrameReady = false;
+
+// 视频播放循环状态变量
+static uint8_t* s_videoFrameBuf = nullptr;
+static uint32_t s_videoFrameBufSize = 0;
+static uint32_t s_playbackAudioChunkCount = 0;
+static uint32_t s_playbackVideoFrameCount = 0;
+static uint32_t s_lastPlaybackStatsTime = 0;
+static bool s_firstAudioDumped = false;
+static uint32_t s_preloadedAudioChunks = 0;
 
 static int JPEGDrawForPlayback(JPEGDRAW *pDraw) {
     int x = pDraw->x;
@@ -278,8 +288,9 @@ void startVideoRecording(void) {
     }
     
     Utils_Logger::info("Starting Video Recording with Audio...");
-    
-    // 生成录制文件名（使用.avi扩展名，前缀为Video）
+
+    Max98357aAudioPlayer::getInstance().releaseI2S();
+
     char fileName[128];
     if (sdCardManager.generateTimestampFileName(fileName, sizeof(fileName), ".avi") == nullptr) {
         Utils_Logger::error("Failed to generate recording filename");
@@ -325,52 +336,41 @@ void startVideoRecording(void) {
 }
 
 void stopVideoRecording(void) {
-    // 即使状态不是REC_RECORDING，也尝试停止录制，提高用户体验
     if (g_recorderState != REC_RECORDING) {
-        // Utils_Logger::info("Video Recorder is not in RECORDING state, attempting to clean up...");
-        // 仍然执行停止逻辑，确保资源被正确释放
+        Utils_Logger::info("Video Recorder is not in RECORDING state, attempting to clean up...");
     }
-    
+
     Utils_Logger::info("Stopping Video Recording with Audio...");
-    
-    // 先停止视频通道（确保视频采集停止）
+
     Camera.channelEnd(VIDEO_CHANNEL_RECORD);
-    
-    // 删除视频帧获取RTOS任务
+
     TaskManager::deleteTask(TaskManager::TASK_VIDEO_FRAME_CAPTURE);
-    // Utils_Logger::info("Video frame capture RTOS task deleted");
-    
-    // 删除音频处理RTOS任务（停止音频采集）
+    Utils_Logger::info("Video frame capture RTOS task deleted");
+
     TaskManager::deleteTask(TaskManager::TASK_AUDIO_PROCESSING);
-    // Utils_Logger::info("Audio processing RTOS task deleted");
-    
-    // 不再刷新剩余音频数据，避免音画不同步
-    // 直接丢弃队列中的剩余数据，确保音视频同步结束
+    Utils_Logger::info("Audio processing RTOS task deleted");
+
+    g_recorderState = REC_IDLE;
+
     size_t queueAvailable = g_microphoneManager.getAudioQueueAvailable();
     if (queueAvailable > 0) {
-        // Utils_Logger::info("Discarding remaining audio samples from queue: %d blocks", queueAvailable);
+        Utils_Logger::info("Remaining audio samples in queue: %d blocks, will be processed by main loop", queueAvailable);
     }
-    
-    // 停止音频采集
+
     g_microphoneManager.stopAVIRecording();
-    
-    // 读取DS3231获取录制结束时间戳（在停止MJPEG录制前获取，确保时间戳准确）
+
     DS3231_Time endTime;
     readDS3231Time(endTime);
-    
-    // 停止MJPEG录制并传递时间参数（这样在文件写入时会自动设置时间戳）
+
     mjpegEncoder.end(&endTime);
-    
-    // 打印停止录制日志
+
     char timeStamp[32];
     formatTimeStamp(timeStamp, sizeof(timeStamp), endTime);
     Utils_Logger::info("Video recording stopped at: %s, file: %s", timeStamp, recordingFileName);
-    
-    // 确保更新录制状态
-    g_recorderState = REC_IDLE;
+
     updatemodifiedtime = true;
-    
-    // Utils_Logger::info("Video Recording with Audio Stopped and File Saved Successfully");
+
+    Utils_Logger::info("Video Recording with Audio Stopped and File Saved Successfully");
 }
 
 void videoRecorderLoop(void) {
@@ -409,11 +409,17 @@ void processPreviewFrame(void) {
     }
 
     unsigned long currentMillis = millis();
-    
+
+    static unsigned long lastPreviewTime = 0;
+    if (currentMillis - lastPreviewTime < 100) {
+        return;
+    }
+    lastPreviewTime = currentMillis;
+
     static unsigned long lastBlinkTime = 0;
     static bool dotVisible = false;
     bool shouldDrawDot = false;
-    
+
     if (g_recorderState == REC_RECORDING) {
         if (currentMillis - lastBlinkTime >= 1000) {
             lastBlinkTime = currentMillis;
@@ -421,28 +427,20 @@ void processPreviewFrame(void) {
         }
         shouldDrawDot = dotVisible;
     }
-    
+
     uint32_t imgAddr;
     uint32_t imgLen;
-    
-    int retryCount = 0;
-    const int MAX_RETRIES = 3;
-    
-    do {
-        Camera.getImage(VIDEO_CHANNEL_PREVIEW, &imgAddr, &imgLen);
-        if (imgLen > 0) break;
-        if (retryCount < MAX_RETRIES - 1) delay(10);
-        retryCount++;
-    } while (retryCount < MAX_RETRIES);
+
+    Camera.getImage(VIDEO_CHANNEL_PREVIEW, &imgAddr, &imgLen);
 
     if (imgLen > 0) {
         memset(s_previewFrameBuffer, 0, sizeof(s_previewFrameBuffer));
         s_previewFrameReady = false;
-        
+
         if (jpeg.open((void*)imgAddr, imgLen, nullptr, jpegReadCallback, jpegSeekCallback, JPEGDrawForPreview)) {
             jpeg.decode(0, 0, JPEG_SCALE_HALF);
             jpeg.close();
-            
+
             if (s_previewFrameReady) {
                 tftManager.drawBitmap(0, 0, PREVIEW_FB_WIDTH, PREVIEW_FB_HEIGHT, s_previewFrameBuffer);
             }
@@ -499,6 +497,7 @@ const uint32_t MEDIA_PER_GROUP = 4; // 每组显示4个媒体
 // 播放状态
 bool isPlaying = false;
 bool isPaused = false;
+unsigned long playbackStartTime = 0;
 unsigned long lastFrameTime = 0;
 
 // 图片查看状态
@@ -725,31 +724,89 @@ void startVideoPlayback(const char* fileName) {
     isPlaying = true;
     isPaused = false;
     lastFrameTime = 0;
+
+    s_playbackAudioChunkCount = 0;
+    s_playbackVideoFrameCount = 0;
+    s_lastPlaybackStatsTime = 0;
+    s_firstAudioDumped = false;
+    s_preloadedAudioChunks = 0;
+
+    g_microphoneManager.stopAVIRecording();
+    g_microphoneManager.deinitI2s();
+
+    Max98357aAudioPlayer& player = Max98357aAudioPlayer::getInstance();
+    player.init();
+
+    uint8_t* chunkData;
+    uint32_t chunkSize;
+    int preloadedChunks = 0;
+    size_t preloadedSamples = 0;
+    const int TARGET_PRELOAD_CHUNKS = 64;
+    int consecutiveSkippedVideoChunks = 0;
     
-    // 编码器回调已在Camera.ino中统一管理，无需在此更新
-    
-    Utils_Logger::info("Started playing video: %s", fileName);
+    while (preloadedChunks < TARGET_PRELOAD_CHUNKS) {
+        MJPEGDecoder::ChunkType type = mjpegDecoder.readNextChunk(&chunkData, &chunkSize);
+        if (type == MJPEGDecoder::CHUNK_TYPE_END) {
+            break;
+        }
+        if (type == MJPEGDecoder::CHUNK_TYPE_AUDIO) {
+            size_t sampleCount = chunkSize / sizeof(int16_t);
+            player.writeAudioData(
+                (const int16_t*)chunkData, sampleCount);
+            preloadedChunks++;
+            preloadedSamples += sampleCount;
+            consecutiveSkippedVideoChunks = 0;
+        } else if (type == MJPEGDecoder::CHUNK_TYPE_VIDEO) {
+            consecutiveSkippedVideoChunks++;
+            if (consecutiveSkippedVideoChunks > 100) {
+                break;
+            }
+        }
+    }
+    mjpegDecoder.resetSequentialMode();
+
+    s_preloadedAudioChunks = preloadedChunks;
+
+    size_t preloadedBytes = preloadedSamples * sizeof(int16_t);
+    float preloadFillPct = player.getBufferFillPercent();
+    Utils_Logger::info("Preloaded %d audio chunks (%u samples, %u bytes), buffer fill: %.0f%%",
+        preloadedChunks, (uint32_t)preloadedSamples, (uint32_t)preloadedBytes, preloadFillPct);
+
+    player.startPlayback();
+
+    Utils_Logger::info("Started playing video: %s, video frames: %d, audio frames: %d",
+        fileName, mjpegDecoder.getFrameCount(), mjpegDecoder.getAudioFrameCount());
 }
 
 // 停止视频播放
 void stopVideoPlayback(void) {
+    Max98357aAudioPlayer::getInstance().stopPlayback();
+    Max98357aAudioPlayer::getInstance().releaseI2S();
+
     mjpegDecoder.close();
     isPlaying = false;
     isPaused = false;
     g_recorderState = REC_FILE_LIST;
-    
-    // 强制重绘文件列表界面
+
+    s_playbackAudioChunkCount = 0;
+    s_playbackVideoFrameCount = 0;
+    s_lastPlaybackStatsTime = 0;
+    s_firstAudioDumped = false;
+    s_preloadedAudioChunks = 0;
+
+    if (s_videoFrameBuf) {
+        free(s_videoFrameBuf);
+        s_videoFrameBuf = nullptr;
+        s_videoFrameBufSize = 0;
+    }
+
+    g_microphoneManager.init();
+
     fileListNeedsRedraw = true;
-    
-    // 重置lastSelectedMediaIndex，确保下次绘制时强制重绘整个界面
     lastSelectedMediaIndex = UINT32_MAX;
-    
-    // 立即绘制文件列表界面，确保快速响应
     drawFileListUI();
-    
+
     Utils_Logger::info("Stopped video playback, returning to file list");
-    
-    // 编码器回调已在Camera.ino中统一管理，无需在此更新
 }
 
 // 暂停视频播放
@@ -764,7 +821,7 @@ void pauseVideoPlayback(void) {
 void resumeVideoPlayback(void) {
     if (isPlaying && isPaused) {
         isPaused = false;
-        lastFrameTime = millis();
+        lastFrameTime = micros();
         Utils_Logger::info("Resumed video playback");
     }
 }
@@ -887,34 +944,147 @@ void imageViewerLoop(void) {
 }
 
 // 视频播放循环（使用帧缓冲区实现高性能回放）
+#define PLAYBACK_MAX_CHUNKS_PER_LOOP 64
+#define PLAYBACK_VIDEO_FRAME_BUF_SIZE (128 * 1024)
+
+static bool ensureVideoFrameBuf(uint32_t requiredSize) {
+    if (s_videoFrameBuf && s_videoFrameBufSize >= requiredSize) {
+        return true;
+    }
+    uint32_t newSize = (requiredSize + 4095) & ~4095;
+    if (newSize < PLAYBACK_VIDEO_FRAME_BUF_SIZE) newSize = PLAYBACK_VIDEO_FRAME_BUF_SIZE;
+    uint8_t* newBuf = (uint8_t*)realloc(s_videoFrameBuf, newSize);
+    if (!newBuf) {
+        Utils_Logger::error("Failed to allocate video frame buffer: %u", newSize);
+        return false;
+    }
+    s_videoFrameBuf = newBuf;
+    s_videoFrameBufSize = newSize;
+    return true;
+}
+
+static void processVideoFrame(uint8_t* frameData, uint32_t frameSize, uint32_t fps, uint32_t frameIntervalMs) {
+    s_playbackVideoFrameCount++;
+
+    if (s_playbackVideoFrameCount > 1) {
+        unsigned long now = millis();
+        unsigned long elapsed = now - lastFrameTime;
+        if (elapsed < frameIntervalMs) {
+            delay(frameIntervalMs - elapsed);
+        }
+    }
+
+    unsigned long frameStartMs = millis();
+    lastFrameTime = frameStartMs;
+    s_playbackFrameReady = false;
+    if (jpeg.open((void*)frameData, frameSize, nullptr, jpegReadCallback, jpegSeekCallback, JPEGDrawForPlayback)) {
+        jpeg.decode(0, 0, JPEG_SCALE_QUARTER);
+        jpeg.close();
+    }
+    unsigned long afterDecodeTime = millis();
+    if (s_playbackFrameReady) {
+        tftManager.drawBitmap(0, 30, PLAYBACK_FB_WIDTH, PLAYBACK_FB_HEIGHT, s_playbackFrameBuffer);
+    }
+
+    if (s_playbackVideoFrameCount <= 4) {
+        Utils_Logger::info("VIDEO_FRAME: #%u, interval=%ums, decode=%ums, fps=%u",
+            s_playbackVideoFrameCount, frameIntervalMs,
+            afterDecodeTime - frameStartMs, fps);
+    }
+}
+
 void videoPlaybackLoop(void) {
     if (g_recorderState != REC_PLAYING || !isPlaying || isPaused) {
         return;
     }
 
-    unsigned long currentMillis = millis();
+    uint8_t* chunkData;
+    uint32_t chunkSize;
     uint32_t fps = mjpegDecoder.getFPS();
-    uint32_t frameInterval = (fps > 0) ? 1000 / fps : 67;
+    uint32_t frameIntervalMs = (fps > 0) ? (1000 + fps - 1) / fps : 67;
+    Max98357aAudioPlayer& player = Max98357aAudioPlayer::getInstance();
 
-    if (currentMillis - lastFrameTime >= frameInterval) {
-        lastFrameTime = currentMillis;
+    bool hasPendingVideo = false;
+    uint32_t pendingVideoSize = 0;
 
-        uint8_t* frameData;
-        uint32_t frameSize;
+    for (int i = 0; i < PLAYBACK_MAX_CHUNKS_PER_LOOP; i++) {
+        MJPEGDecoder::ChunkType type = mjpegDecoder.readNextChunk(&chunkData, &chunkSize);
 
-        if (mjpegDecoder.readNextFrame(&frameData, &frameSize)) {
-            s_playbackFrameReady = false;
-            if (jpeg.open((void*)frameData, frameSize, nullptr, jpegReadCallback, jpegSeekCallback, JPEGDrawForPlayback)) {
-                jpeg.decode(0, 0, JPEG_SCALE_QUARTER);
-                jpeg.close();
+        if (type == MJPEGDecoder::CHUNK_TYPE_END) {
+            if (hasPendingVideo && ensureVideoFrameBuf(pendingVideoSize)) {
+                processVideoFrame(s_videoFrameBuf, pendingVideoSize, fps, frameIntervalMs);
             }
-            if (s_playbackFrameReady) {
-                tftManager.drawBitmap(0, 30, PLAYBACK_FB_WIDTH, PLAYBACK_FB_HEIGHT, s_playbackFrameBuffer);
-            }
-        } else {
-            // 播放结束
             stopVideoPlayback();
+            return;
         }
+
+        if (type == MJPEGDecoder::CHUNK_TYPE_AUDIO) {
+            size_t sampleCount = chunkSize / sizeof(int16_t);
+            s_playbackAudioChunkCount++;
+
+            if (!s_firstAudioDumped) {
+                s_firstAudioDumped = true;
+                Utils_Logger::info("AUDIO_DEC: First chunk, size=%u, samples=%u", chunkSize, sampleCount);
+            }
+
+            if (s_playbackAudioChunkCount % 20 == 0) {
+                const int16_t* samples = (const int16_t*)chunkData;
+                int16_t minVal = 32767, maxVal = -32768;
+                int64_t sum = 0;
+                for (size_t j = 0; j < sampleCount; j++) {
+                    if (samples[j] < minVal) minVal = samples[j];
+                    if (samples[j] > maxVal) maxVal = samples[j];
+                    sum += samples[j];
+                }
+                int16_t dcOffset = (int16_t)(sum / (int64_t)sampleCount);
+                Utils_Logger::info("AUDIO_DEC: Chunk#%u size=%u samples=%u min=%d max=%d dc=%d p2p=%d",
+                    s_playbackAudioChunkCount, chunkSize, sampleCount, minVal, maxVal, dcOffset, maxVal - minVal);
+            }
+
+            if (s_preloadedAudioChunks > 0) {
+                s_preloadedAudioChunks--;
+            } else {
+                player.writeAudioData((const int16_t*)chunkData, sampleCount);
+            }
+        } else if (type == MJPEGDecoder::CHUNK_TYPE_VIDEO) {
+            if (!player.isBufferAboveLowWatermark()) {
+                if (ensureVideoFrameBuf(chunkSize)) {
+                    memcpy(s_videoFrameBuf, chunkData, chunkSize);
+                    pendingVideoSize = chunkSize;
+                    hasPendingVideo = true;
+                }
+                continue;
+            }
+
+            if (hasPendingVideo) {
+                processVideoFrame(s_videoFrameBuf, pendingVideoSize, fps, frameIntervalMs);
+                hasPendingVideo = false;
+            }
+
+            if (ensureVideoFrameBuf(chunkSize)) {
+                memcpy(s_videoFrameBuf, chunkData, chunkSize);
+                processVideoFrame(s_videoFrameBuf, chunkSize, fps, frameIntervalMs);
+            }
+
+            break;
+        }
+    }
+
+    if (hasPendingVideo && player.isBufferAboveLowWatermark()) {
+        processVideoFrame(s_videoFrameBuf, pendingVideoSize, fps, frameIntervalMs);
+        hasPendingVideo = false;
+    }
+
+    unsigned long now = millis();
+    if (now - s_lastPlaybackStatsTime >= 2000) {
+        uint32_t audioTimeMs = (player.m_playedSamples * 1000) / MAX98357A_SAMPLE_RATE;
+        float underrunRate = player.m_txCallbackCount > 0 ?
+            (float)player.m_txUnderrunCount * 100.0f / player.m_txCallbackCount : 0.0f;
+        Utils_Logger::info("PLAYBACK: t=%ums, aChunks=%u, vFrames=%u, underruns=%u/%u(%.1f%%), buf=%u/%u",
+            audioTimeMs, s_playbackAudioChunkCount, s_playbackVideoFrameCount,
+            player.m_txUnderrunCount, player.m_txCallbackCount, underrunRate,
+            player.m_txBufferCount, player.m_txBufferSize);
+        s_lastPlaybackStatsTime = now;
     }
 }
 

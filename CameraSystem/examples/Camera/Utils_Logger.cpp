@@ -40,6 +40,15 @@ void Utils_Logger::error(const char* format, ...) {
     }
 }
 
+void Utils_Logger::warn(const char* format, ...) {
+    if (currentLevel >= LEVEL_INFO) {
+        va_list args;
+        va_start(args, format);
+        logInternal(LEVEL_INFO, "[WARN] ", format, args);
+        va_end(args);
+    }
+}
+
 void Utils_Logger::info(const char* format, ...) {
     if (currentLevel >= LEVEL_INFO) {
         va_list args;

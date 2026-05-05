@@ -43,6 +43,8 @@ MJPEGEncoder::MJPEGEncoder()
     , m_totalFramesOffset(0)
     , m_videoStrhLengthOffset(0)
     , m_audioStrhLengthOffset(0)
+    , m_microSecPerFrameOffset(0)
+    , m_videoStrhRateOffset(0)
     , m_indexEntries(nullptr)
     , m_indexEntryCount(0)
     , m_indexCapacity(0)
@@ -317,6 +319,31 @@ bool MJPEGEncoder::end(const DS3231_Time* fileTime) {
         Utils_Logger::info("Updated audio strh length to %d samples (was %d frames)", m_totalAudioSamples, m_audioFrameCount);
     }
     
+    if (m_totalAudioSamples > 0 && m_frameCount > 0 && m_microSecPerFrameOffset > 0 && m_videoStrhRateOffset > 0) {
+        uint32_t audioDurationMs = (uint32_t)((uint64_t)m_totalAudioSamples * 1000 / AUDIO_SAMPLE_RATE);
+        if (audioDurationMs > 0) {
+            uint32_t actualFpsX1000 = (uint32_t)((uint64_t)m_frameCount * 1000000 / audioDurationMs);
+            uint32_t declaredFpsX1000 = m_fps * 1000;
+            
+            if (actualFpsX1000 < declaredFpsX1000 * 90 / 100 || actualFpsX1000 > declaredFpsX1000 * 110 / 100) {
+                uint32_t actualFps = actualFpsX1000 / 1000;
+                if (actualFps < 1) actualFps = 1;
+                
+                uint32_t actualMicroSecPerFrame = 1000000 / actualFps;
+                
+                writeLE32(m_buffer + m_microSecPerFrameOffset, actualMicroSecPerFrame);
+                writeLE32(m_buffer + m_videoStrhRateOffset, actualFps);
+                
+                Utils_Logger::info("Frame rate corrected: declared=%d fps, actual=%d fps (based on %d frames in %d ms)",
+                                  m_fps, actualFps, m_frameCount, audioDurationMs);
+                Utils_Logger::info("microSecPerFrame updated: %d -> %d", 1000000 / m_fps, actualMicroSecPerFrame);
+            } else {
+                Utils_Logger::info("Frame rate OK: declared=%d fps, actual=%d fps (within 10%% tolerance)",
+                                  m_fps, actualFpsX1000 / 1000);
+            }
+        }
+    }
+    
     Utils_Logger::info("Final file size: %d bytes", m_fileSize);
     Utils_Logger::info("Index entries: %d", m_indexEntryCount);
     
@@ -404,6 +431,7 @@ bool MJPEGEncoder::writeAVIHeader() {
     uint32_t streams = 2;
     uint32_t suggestedBufferSize = m_width * m_height * 3 + 4096;
     
+    m_microSecPerFrameOffset = m_bufferPos;
     writeLE32(m_buffer + m_bufferPos, microSecPerFrame);
     m_bufferPos += 4;
     writeLE32(m_buffer + m_bufferPos, maxBytesPerSec);
@@ -459,6 +487,7 @@ bool MJPEGEncoder::writeAVIHeader() {
     m_bufferPos += 4;
     writeLE32(m_buffer + m_bufferPos, 1);
     m_bufferPos += 4;
+    m_videoStrhRateOffset = m_bufferPos;
     writeLE32(m_buffer + m_bufferPos, m_fps);
     m_bufferPos += 4;
     writeLE32(m_buffer + m_bufferPos, 0);
@@ -691,8 +720,17 @@ MJPEGDecoder::MJPEGDecoder()
     , m_bufferSize(0)
     , m_moviStartPos(0)
     , m_indexStartPos(0)
+    , m_currentFilePos(0)
+    , m_sequentialMode(false)
     , m_frameInfos(nullptr)
     , m_frameInfoCount(0)
+    , m_audioFrameInfos(nullptr)
+    , m_audioFrameInfoCount(0)
+    , m_audioFrameInfoCapacity(0)
+    , m_currentAudioFrameIndex(0)
+    , m_audioSampleRate(16000)
+    , m_audioBitsPerSample(16)
+    , m_audioChannels(1)
 {
     memset(m_fileName, 0, sizeof(m_fileName));
     memset(&m_file, 0, sizeof(m_file));
@@ -707,6 +745,10 @@ MJPEGDecoder::~MJPEGDecoder() {
     if (m_frameInfos) {
         free(m_frameInfos);
         m_frameInfos = nullptr;
+    }
+    if (m_audioFrameInfos) {
+        free(m_audioFrameInfos);
+        m_audioFrameInfos = nullptr;
     }
 }
 
@@ -739,7 +781,25 @@ bool MJPEGDecoder::open(const char* fileName) {
     m_height = 480;
     m_fps = 15;
     m_frameCount = 100;
-    
+
+    UINT bytesRead;
+    uint8_t avihBuf[56];
+    f_lseek(&m_file, 32);
+    f_read(&m_file, avihBuf, 56, &bytesRead);
+    if (bytesRead >= 56) {
+        uint32_t microSecPerFrame = readLE32(avihBuf);
+        if (microSecPerFrame > 0 && microSecPerFrame < 10000000) {
+            m_fps = (1000000 + microSecPerFrame / 2) / microSecPerFrame;
+            if (m_fps < 1) m_fps = 1;
+            if (m_fps > 60) m_fps = 60;
+        }
+        uint32_t totalFrames = readLE32(avihBuf + 16);
+        if (totalFrames > 0 && totalFrames < 100000) {
+            m_frameCount = totalFrames;
+        }
+        Utils_Logger::info("AVI header: %u fps, %u total frames", m_fps, m_frameCount);
+    }
+
     if (parseSimplifiedMovi()) {
         success = true;
     }
@@ -778,9 +838,20 @@ bool MJPEGDecoder::close() {
         m_frameInfos = nullptr;
     }
     
+    if (m_audioFrameInfos) {
+        free(m_audioFrameInfos);
+        m_audioFrameInfos = nullptr;
+    }
+    
     m_frameInfoCount = 0;
     m_currentFrameIndex = 0;
     m_frameCount = 0;
+    m_audioFrameInfoCount = 0;
+    m_audioFrameInfoCapacity = 0;
+    m_currentAudioFrameIndex = 0;
+    m_currentFilePos = 0;
+    m_sequentialMode = false;
+    m_moviStartPos = 0;
     
     return true;
 }
@@ -818,8 +889,161 @@ bool MJPEGDecoder::readNextFrame(uint8_t** frameData, uint32_t* frameSize) {
     *frameData = m_buffer;
     *frameSize = frameInfo.size;
     m_currentFrameIndex++;
-    
+
     return true;
+}
+
+bool MJPEGDecoder::readNextAudioFrame(uint8_t** audioData, uint32_t* audioSize) {
+    if (!m_open || !m_audioFrameInfos) {
+        return false;
+    }
+
+    if (m_currentAudioFrameIndex >= m_audioFrameInfoCount) {
+        return false;
+    }
+
+    FrameInfo& audioInfo = m_audioFrameInfos[m_currentAudioFrameIndex];
+
+    if (audioInfo.size > m_bufferSize) {
+        uint8_t* newBuffer = (uint8_t*)realloc(m_buffer, audioInfo.size);
+        if (!newBuffer) {
+            return false;
+        }
+        m_buffer = newBuffer;
+        m_bufferSize = audioInfo.size;
+    }
+
+    f_lseek(&m_file, audioInfo.offset);
+    UINT bytesRead;
+    f_read(&m_file, m_buffer, audioInfo.size, &bytesRead);
+
+    *audioData = m_buffer;
+    *audioSize = audioInfo.size;
+    m_currentAudioFrameIndex++;
+
+    return true;
+}
+
+MJPEGDecoder::ChunkType MJPEGDecoder::readNextChunk(uint8_t** chunkData, uint32_t* chunkSize) {
+    if (!m_open) {
+        return CHUNK_TYPE_END;
+    }
+
+    if (!m_sequentialMode) {
+        m_sequentialMode = true;
+        if (m_moviStartPos == 0) {
+            uint32_t searchPos = 0;
+            while (searchPos < m_fileSize - 12) {
+                UINT bytesRead;
+                f_lseek(&m_file, searchPos);
+                f_read(&m_file, m_buffer, 12, &bytesRead);
+                if (memcmp(m_buffer, "LIST", 4) == 0 && memcmp(m_buffer + 8, "movi", 4) == 0) {
+                    m_moviStartPos = searchPos;
+                    Utils_Logger::info("MJPEGDecoder: Found movi LIST at %u", searchPos);
+                    break;
+                }
+                searchPos++;
+            }
+        }
+        m_currentFilePos = m_moviStartPos + 12;
+        Utils_Logger::info("MJPEGDecoder: Sequential mode, moviStart=%u, dataStart=%u, fileSize=%u",
+            m_moviStartPos, m_currentFilePos, m_fileSize);
+
+        UINT bytesRead;
+        f_lseek(&m_file, m_moviStartPos);
+        f_read(&m_file, m_buffer, 16, &bytesRead);
+        char tag[5] = {0};
+        memcpy(tag, m_buffer, 4);
+        Utils_Logger::info("MJPEGDecoder: At moviStart [%s] size=%u sub=[%.4s]", tag, readLE32(m_buffer + 4), (char*)(m_buffer + 8));
+    }
+
+    while (m_currentFilePos < m_fileSize - 8) {
+        UINT bytesRead;
+        f_lseek(&m_file, m_currentFilePos);
+        f_read(&m_file, m_buffer, 8, &bytesRead);
+
+        if (bytesRead < 8) {
+            Utils_Logger::warn("MJPEGDecoder: Short read at pos=%u, got=%u", m_currentFilePos, bytesRead);
+            return CHUNK_TYPE_END;
+        }
+
+        uint32_t chunkDataSize = readLE32(m_buffer + 4);
+
+        if (memcmp(m_buffer, "00db", 4) == 0 || memcmp(m_buffer, "00dc", 4) == 0) {
+            if (chunkDataSize > 0 && chunkDataSize < m_bufferSize && 
+                m_currentFilePos + 8 + chunkDataSize <= m_fileSize) {
+                f_lseek(&m_file, m_currentFilePos + 8);
+                f_read(&m_file, m_buffer, chunkDataSize, &bytesRead);
+                *chunkData = m_buffer;
+                *chunkSize = chunkDataSize;
+                m_currentFrameIndex++;
+                if (m_currentFrameIndex <= 3) {
+                    Utils_Logger::info("MJPEGDecoder: Video chunk #%u at %u, size=%u", m_currentFrameIndex, m_currentFilePos, chunkDataSize);
+                }
+                m_currentFilePos += 8 + chunkDataSize + (chunkDataSize % 2);
+                return CHUNK_TYPE_VIDEO;
+            }
+            Utils_Logger::warn("MJPEGDecoder: Skip video chunk at %u, size=%u", m_currentFilePos, chunkDataSize);
+            m_currentFilePos += 8 + chunkDataSize + (chunkDataSize % 2);
+            continue;
+        } else if (memcmp(m_buffer, "01wb", 4) == 0) {
+            if (chunkDataSize > 0 && chunkDataSize < m_bufferSize &&
+                m_currentFilePos + 8 + chunkDataSize <= m_fileSize) {
+                f_lseek(&m_file, m_currentFilePos + 8);
+                f_read(&m_file, m_buffer, chunkDataSize, &bytesRead);
+                *chunkData = m_buffer;
+                *chunkSize = chunkDataSize;
+                m_currentAudioFrameIndex++;
+                if (m_currentAudioFrameIndex <= 3 || m_currentAudioFrameIndex % 50 == 0) {
+                    Utils_Logger::info("MJPEGDecoder: Audio chunk #%u at %u, size=%u, samples=%u",
+                        m_currentAudioFrameIndex, m_currentFilePos, chunkDataSize, chunkDataSize / 2);
+                }
+                m_currentFilePos += 8 + chunkDataSize + (chunkDataSize % 2);
+                return CHUNK_TYPE_AUDIO;
+            }
+            Utils_Logger::warn("MJPEGDecoder: Skip audio chunk at %u, size=%u", m_currentFilePos, chunkDataSize);
+            m_currentFilePos += 8 + chunkDataSize + (chunkDataSize % 2);
+            continue;
+        } else if (memcmp(m_buffer, "idx1", 4) == 0) {
+            Utils_Logger::info("MJPEGDecoder: Reached idx1 at pos=%u, vFrames=%u, aFrames=%u",
+                m_currentFilePos, m_currentFrameIndex, m_currentAudioFrameIndex);
+            return CHUNK_TYPE_END;
+        } else if (memcmp(m_buffer, "LIST", 4) == 0) {
+            uint32_t listSize = chunkDataSize;
+            if (m_currentFilePos + 12 <= m_fileSize) {
+                f_lseek(&m_file, m_currentFilePos + 8);
+                char listType[5] = {0};
+                f_read(&m_file, listType, 4, &bytesRead);
+                if (memcmp(listType, "movi", 4) == 0) {
+                    m_currentFilePos += 12;
+                    continue;
+                }
+            }
+            m_currentFilePos += 8 + listSize + (listSize % 2);
+            continue;
+        } else {
+            char tag[5] = {0};
+            memcpy(tag, m_buffer, 4);
+            if (chunkDataSize > 0 && chunkDataSize < m_bufferSize &&
+                m_currentFilePos + 8 + chunkDataSize <= m_fileSize) {
+                Utils_Logger::warn("MJPEGDecoder: Skip unknown [%.4s] at %u, size=%u", tag, m_currentFilePos, chunkDataSize);
+                m_currentFilePos += 8 + chunkDataSize + (chunkDataSize % 2);
+            } else {
+                Utils_Logger::warn("MJPEGDecoder: Unknown [%.4s] at %u, invalid size=%u, skip 1", tag, m_currentFilePos, chunkDataSize);
+                m_currentFilePos += 1;
+            }
+            continue;
+        }
+    }
+
+    return CHUNK_TYPE_END;
+}
+
+void MJPEGDecoder::resetSequentialMode() {
+    m_sequentialMode = false;
+    m_currentFilePos = m_moviStartPos + 12;
+    m_currentFrameIndex = 0;
+    m_currentAudioFrameIndex = 0;
 }
 
 bool MJPEGDecoder::parseMoreFrames() {
@@ -862,6 +1086,26 @@ uint32_t MJPEGDecoder::getCurrentFrameIndex() const {
     return m_currentFrameIndex;
 }
 
+uint32_t MJPEGDecoder::getAudioFrameCount() const {
+    return m_audioFrameInfoCount;
+}
+
+uint32_t MJPEGDecoder::getCurrentAudioFrameIndex() const {
+    return m_currentAudioFrameIndex;
+}
+
+uint32_t MJPEGDecoder::getAudioSampleRate() const {
+    return m_audioSampleRate;
+}
+
+uint32_t MJPEGDecoder::getAudioBitsPerSample() const {
+    return m_audioBitsPerSample;
+}
+
+uint32_t MJPEGDecoder::getAudioChannels() const {
+    return m_audioChannels;
+}
+
 bool MJPEGDecoder::parseAVIHeader() {
     return true;
 }
@@ -881,30 +1125,37 @@ bool MJPEGDecoder::parseSimplifiedMovi() {
         return false;
     }
     
+    m_audioFrameInfoCapacity = 10000;
+    m_audioFrameInfos = (FrameInfo*)malloc(m_audioFrameInfoCapacity * sizeof(FrameInfo));
+    if (!m_audioFrameInfos) {
+        free(m_frameInfos);
+        m_frameInfos = nullptr;
+        return false;
+    }
+    m_audioFrameInfoCount = 0;
+    
     uint32_t pos = 0;
     uint32_t foundFrames = 0;
     
-    // 先寻找 movi 块，跳过文件头部
     while (pos < m_fileSize - 8) {
         UINT bytesRead;
         f_lseek(&m_file, pos);
         f_read(&m_file, m_buffer, 8, &bytesRead);
         
         if (memcmp(m_buffer, "movi", 4) == 0) {
-            pos += 8;
+            m_moviStartPos = (pos >= 8) ? pos - 8 : 0;
+            pos += 4;
             break;
         }
         pos += 1;
     }
     
-    // 从 movi 块开始查找所有视频帧
     while (pos < m_fileSize - 8 && foundFrames < 10000) {
         UINT bytesRead;
         f_lseek(&m_file, pos);
         f_read(&m_file, m_buffer, 8, &bytesRead);
         
         if (memcmp(m_buffer, "00db", 4) == 0) {
-            // 找到视频帧
             uint32_t frameSize = readLE32(m_buffer + 4);
             if (frameSize > 100 && frameSize < 1000000) {
                 if (pos + 8 + frameSize <= m_fileSize) {
@@ -918,20 +1169,26 @@ bool MJPEGDecoder::parseSimplifiedMovi() {
             }
             pos += 8;
         } else if (memcmp(m_buffer, "01wb", 4) == 0) {
-            // 找到音频帧，跳过
             uint32_t audioSize = readLE32(m_buffer + 4);
+            if (audioSize > 0 && audioSize < 1000000) {
+                if (pos + 8 + audioSize <= m_fileSize) {
+                    if (m_audioFrameInfoCount < m_audioFrameInfoCapacity) {
+                        m_audioFrameInfos[m_audioFrameInfoCount].offset = pos + 8;
+                        m_audioFrameInfos[m_audioFrameInfoCount].size = audioSize;
+                        m_audioFrameInfoCount++;
+                    }
+                }
+            }
             pos += 8 + audioSize + (audioSize % 2);
         } else if (memcmp(m_buffer, "idx1", 4) == 0) {
-            // 找到索引块，停止解析
             break;
         } else {
-            // 其他块，向前移动
             pos += 1;
         }
     }
     
     m_frameCount = m_frameInfoCount;
-    Utils_Logger::info("MJPEGDecoder found %d video frames", m_frameInfoCount);
+    Utils_Logger::info("MJPEGDecoder found %d video frames, %d audio frames", m_frameInfoCount, m_audioFrameInfoCount);
     return m_frameInfoCount > 0;
 }
 

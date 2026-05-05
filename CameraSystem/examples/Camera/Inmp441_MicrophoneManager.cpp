@@ -91,6 +91,8 @@ Inmp441MicrophoneManager::Inmp441MicrophoneManager()
     , m_softwareGain(GAIN_30DB)
     , m_bufferOverflowCount(0)
     , m_maxBufferUsed(0)
+    , m_dcOffset(0)
+    , m_prevSample(0)
     , m_pfs(nullptr)
     , m_sdInitialized(false)
     , m_recording(false)
@@ -426,6 +428,12 @@ bool Inmp441MicrophoneManager::initI2S() {
     i2s_set_format(&m_i2sObj, FORMAT_I2S);
     i2s_set_master(&m_i2sObj, I2S_MASTER);
     
+    i2s_set_dma_burst_size(&m_i2sObj, BURST16);
+    i2s_set_byte_swap(&m_i2sObj, FALSE);
+    i2s_set_data_start_edge(&m_i2sObj, NEGATIVE_EDGE);
+    i2s_set_sck_inv(&m_i2sObj, FALSE);
+    i2s_set_ws_swap(&m_i2sObj, LEFT_PHASE);
+
     Serial.println("[I2S] 使能I2S...");
     i2s_enable(&m_i2sObj);
     
@@ -452,6 +460,28 @@ bool Inmp441MicrophoneManager::initI2S() {
     Serial.print("  软件增益: "); Serial.print(m_softwareGain * 6); Serial.println("dB");
     
     return true;
+}
+
+void Inmp441MicrophoneManager::deinitI2s() {
+    if (!m_i2sInitialized) {
+        return;
+    }
+
+    Serial.println("[I2S] Deinitializing I2S for INMP441...");
+
+    if (m_i2sObj.i2s_initialized == 1) {
+        i2s_disable(&m_i2sObj);
+        i2s_deinit(&m_i2sObj);
+        memset(&m_i2sObj, 0, sizeof(m_i2sObj));
+    }
+
+    if (m_ringBuffer) {
+        delete m_ringBuffer;
+        m_ringBuffer = nullptr;
+    }
+
+    m_i2sInitialized = false;
+    Serial.println("[I2S] I2S deinitialized for INMP441");
 }
 
 void Inmp441MicrophoneManager::processAudioData() {
@@ -540,30 +570,45 @@ extern "C" {
 
 void i2s_rx_callback(uint32_t id, char *pbuf) {
     (void)id;
-    
+
     if (!pbuf || !s_microphoneManagerPtr) {
         return;
     }
-    
+
+    static bool s_monoDiagEnabled = true;
+    if (s_monoDiagEnabled && s_microphoneManagerPtr->m_sampleCount <= 2) {
+        uint8_t* diagSrc = (uint8_t*)pbuf;
+        Serial.print("[MONO_DIAG] First 8 samples (hex): ");
+        for (int i = 0; i < 8; i++) {
+            Serial.print(diagSrc[i*2+1], HEX); Serial.print(" ");
+            Serial.print(diagSrc[i*2], HEX); Serial.print(" ");
+        }
+        Serial.println();
+        if (s_microphoneManagerPtr->m_sampleCount == 2) {
+            s_monoDiagEnabled = false;
+        }
+    }
+
     uint8_t* src = (uint8_t*)pbuf;
     size_t samples = DMA_PAGE_SIZE / 2;
-    
+
+    uint8_t gain = s_microphoneManagerPtr->m_softwareGain;
+
     for (size_t i = 0; i < samples; i++) {
         int16_t sample = (int16_t)((uint16_t)src[i*2+1] << 8 | src[i*2]);
-        
-        uint8_t gain = s_microphoneManagerPtr->m_softwareGain;
+
         if (gain > 0) {
             int32_t amplified = ((int32_t)sample) << gain;
             if (amplified > 32767) amplified = 32767;
             if (amplified < -32768) amplified = -32768;
             sample = (int16_t)amplified;
         }
-        
+
         if (s_microphoneManagerPtr->m_ringBuffer) {
             s_microphoneManagerPtr->m_ringBuffer->write(sample);
         }
     }
-    
+
     s_microphoneManagerPtr->m_sampleCount++;
     i2s_recv_page(&s_microphoneManagerPtr->m_i2sObj);
 }

@@ -67,6 +67,7 @@ private:
     ParamSettingsMenu *paramSettingsMenu; // 参数设置菜单指针
     bool isInitialized = false;
     bool inParamSettings = false;     // 是否在参数设置菜单中
+    int lastMainMenuPosition = 0;      // 保存进入子菜单/对话框时的主菜单位置，用于返回时恢复三角形
     bool inRebootConfirm = false;     // 是否在重启确认对话框中
     bool confirmDefaultBack = true;    // 确认对话框默认选中"返回"选项
     int rebootConfirmPosB = -1;        // 保存进入确认对话框时的B位置

@@ -342,10 +342,13 @@ bool MenuContext::handleEvent(MenuEventType event) {
                 const MenuItem *item = getCurrentMenuItemInfo();
                 if (item != nullptr) {
                     int currentPos = triangleController.getCurrentPosition();
-                    Utils_Logger::info("[MenuContext] 选择菜单项: %d (%c) - %s", 
-                                      currentPos, (char)('A' + currentPos), 
+                    Utils_Logger::info("[MenuContext] 选择菜单项: %d (%c) - %s",
+                                      currentPos, (char)('A' + currentPos),
                                       item->label);
-                    
+
+                    // 保存当前位置，以便从子菜单返回时恢复
+                    lastMainMenuPosition = currentPos;
+
                     // 根据菜单项类型和操作执行不同的逻辑
                     switch (item->operation) {
                         case MENU_OPERATION_CAPTURE:
@@ -367,6 +370,7 @@ bool MenuContext::handleEvent(MenuEventType event) {
                         case MENU_OPERATION_SETTINGS:
                             if (item->type == MENU_ITEM_TYPE_SUBMENU) {
                                 Utils_Logger::info("[MenuContext] 进入设置子菜单");
+                                lastMainMenuPosition = triangleController.getCurrentPosition();
                                 menuManager.switchToPageByType(MENU_PAGE_SUB);
                                 triangleController.resetPosition();
                             }
@@ -689,21 +693,21 @@ void MenuContext::switchToSubMenu() {
 void MenuContext::switchToMainMenu() {
     Utils_Logger::info("切换回主菜单");
     StateManager::getInstance().setCurrentState(STATE_MAIN_MENU);
-    
+
     // 清除参数设置菜单标志
     inParamSettings = false;
-    
+
     // 清除可能残留的按钮按下标志，防止错误触发任务创建
     StateManager::getInstance().setButtonPressDetected(false);
-    
+
     // 切换回主菜单页面
     menuManager.switchToPageByType(MENU_PAGE_MAIN);
-    
-    // 重置三角形位置到A并显示菜单
-    triangleController.resetPosition();
+
+    // 恢复三角形到进入子菜单前的主菜单位置，而不是重置到A
+    triangleController.moveToPosition((TriangleController::MenuPosition)lastMainMenuPosition);
     showMenu();
-    
-    Utils_Logger::info("已切换回主菜单");
+
+    Utils_Logger::info("已切换回主菜单，三角形指向选项%c", (char)('A' + lastMainMenuPosition));
 }
 
 // 清理菜单上下文资源

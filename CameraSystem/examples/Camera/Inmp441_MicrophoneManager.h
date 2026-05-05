@@ -103,6 +103,7 @@ public:
     
     // 初始化
     bool init();
+    void deinitI2s();
     
     // 主循环处理
     void loop();
@@ -169,6 +170,9 @@ private:
     uint8_t m_softwareGain;
     uint32_t m_bufferOverflowCount;
     size_t m_maxBufferUsed;
+    
+    int32_t m_dcOffset;
+    int16_t m_prevSample;
     
     // SD卡相关
     AmebaFatFS* m_pfs;  // 指向外部文件系统（由sdCardManager提供）

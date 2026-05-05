@@ -62,6 +62,8 @@ private:
     uint32_t m_totalFramesOffset;
     uint32_t m_videoStrhLengthOffset;
     uint32_t m_audioStrhLengthOffset;
+    uint32_t m_microSecPerFrameOffset;
+    uint32_t m_videoStrhRateOffset;
     
     AVIIndexEntry* m_indexEntries;
     uint32_t m_indexEntryCount;
@@ -79,14 +81,31 @@ public:
     bool open(const char* fileName);
     bool close();
     bool readNextFrame(uint8_t** frameData, uint32_t* frameSize);
+    bool readNextAudioFrame(uint8_t** audioData, uint32_t* audioSize);
+
+    typedef enum {
+        CHUNK_TYPE_VIDEO = 0,
+        CHUNK_TYPE_AUDIO = 1,
+        CHUNK_TYPE_UNKNOWN = 2,
+        CHUNK_TYPE_END = 3
+    } ChunkType;
+
+    ChunkType readNextChunk(uint8_t** chunkData, uint32_t* chunkSize);
+    void resetSequentialMode();
+
     bool seekToFrame(uint32_t frameIndex);
     bool isOpen() const;
     uint32_t getFrameCount() const;
+    uint32_t getAudioFrameCount() const;
     uint32_t getWidth() const;
     uint32_t getHeight() const;
     uint32_t getFPS() const;
     uint32_t getFileSize() const;
     uint32_t getCurrentFrameIndex() const;
+    uint32_t getCurrentAudioFrameIndex() const;
+    uint32_t getAudioSampleRate() const;
+    uint32_t getAudioBitsPerSample() const;
+    uint32_t getAudioChannels() const;
     
 private:
     bool parseAVIHeader();
@@ -112,6 +131,9 @@ private:
     FIL m_file;
     uint32_t m_moviStartPos;
     uint32_t m_indexStartPos;
+    uint32_t m_currentFilePos;
+
+    bool m_sequentialMode;
     
     struct FrameInfo {
         uint32_t offset;
@@ -120,6 +142,14 @@ private:
     
     FrameInfo* m_frameInfos;
     uint32_t m_frameInfoCount;
+    
+    FrameInfo* m_audioFrameInfos;
+    uint32_t m_audioFrameInfoCount;
+    uint32_t m_audioFrameInfoCapacity;
+    uint32_t m_currentAudioFrameIndex;
+    uint32_t m_audioSampleRate;
+    uint32_t m_audioBitsPerSample;
+    uint32_t m_audioChannels;
 };
 
 #endif // MJPEG_ENCODER_H

@@ -9,16 +9,20 @@
 - **输入设备**：EC11旋转编码器
 - **相机模块**：GC2053摄像头
 - **存储设备**：Micro SD卡
-- **时钟模块**：DS1307实时时钟
+- **时钟模块**：DS3231实时时钟
 - **操作系统**：FreeRTOS
 
 ## 硬件要求
 
 - AMB82-MINI开发板
 - ST7789 240x320 TFT屏幕
+- GC2053摄像头模块
 - EC11旋转编码器(在 EC11 旋转编码器 的 CLK、DT、SW 引脚与 GND 之间并联了10nF陶瓷电容，核心是通过 RC 滤波抑制机械触点抖动和电磁噪声，电容值选择需兼顾滤波效果和信号响应速度，过大的电容会导致脉冲上升 / 下降沿延迟，造成单片机识别失效。)
+- INMP441 I2S麦克风模块 (录音)
+- MAX98357A I2S功放模块 (音频播放, 与INMP441分时复用I2S1接口)
+- 扬声器 (8Ω, 0.5W-3W, 连接MAX98357A输出)
 - Micro SD卡（建议8GB以上）
-- DS1307实时时钟模块
+- DS3231实时时钟模块
 - 12V电源适配器
 
 ## 软件要求
@@ -30,7 +34,7 @@
 
 ## 系统版本
 
-**当前版本**：V1.38
+**当前版本**：V1.111
 
 ## 功能特点
 
@@ -50,14 +54,17 @@
 
 ### 视频录制功能
 - **720P视频录制**：1280x720分辨率，15fps，MJPEG编码
-- **音频同步录制**：16kHz单声道音频，PCM编码
+- **音频同步录制**：16kHz单声道音频，PCM编码，INMP441 I2S麦克风
 - **AVI格式封装**：独立的音频和视频轨道
 - **编码器控制**：按压开关开始/停止录制，旋转旋钮返回主菜单
 - **实时预览**：VGA分辨率实时预览显示
+- **双通道协作**：录制通道(0)编码，预览通道(1)显示
 
 ### 图片回放功能
 - **SD卡照片读取**：支持从SD卡读取JPG格式图片
-- **MJPEG视频回放**：支持AVI格式MJPEG视频播放
+- **MJPEG视频回放**：支持AVI格式MJPEG视频播放，带PCM音频解码
+- **MAX98357A音频输出**：16kHz立体声输出，I2S1_TX接口
+- **音频预加载**：播放前预填64个音频块(32768 samples)到缓冲区，防止初始掉帧
 - **编码器控制**：旋转旋钮切换文件，按压开关进入播放/返回
 - **四格布局显示**：文件列表以四格缩略图布局展示
 - **自动缩放**：自动将720P图片缩放到240x320屏幕尺寸
@@ -70,7 +77,7 @@
 - **模块化设计**：分层架构，易于扩展和维护
 - **完善的日志系统**：分级日志记录，便于调试和故障排除
 - **错误处理**：超时检测和错误恢复机制
-- **DS1307实时时钟模块**：
+- **DS3231实时时钟模块**：
   - 硬件I2C通信，稳定可靠
   - 支持NTP网络校时（自动连接国内NTP服务器）
   - 系统启动时自动获取当前时间
@@ -90,6 +97,15 @@
 - **存储空间监控**：实时显示SD卡剩余空间
 - **文件操作**：创建、删除、重命名文件和目录
 - **文件时间戳**：支持设置文件最后修改时间
+
+### 音频系统
+- **双模块架构**：INMP441录音(16kHz/单声道/I2S1_RX) + MAX98357A播放(16kHz/立体声/I2S1_TX)
+- **I2S分时复用**：录音与播放共享I2S1接口(D14 SCK/D15 TX/D17 WS/D18 RX)，互斥使用
+- **DMA环缓冲**：4页×1280字节DMA缓冲 + 65536 samples软件环缓冲
+- **音频预加载**：视频播放前预填64个音频块确保播放流畅
+- **实时监控**：TX回调监控缓冲水位、欠载率和音频统计(最小/最大/均值/DC偏移)
+- **淡入淡出**：播放开始/停止时自动淡入淡出，消除爆音
+- **DC偏移消除**：单极点高通滤波器消除音频DC偏移
 
 ### 网络功能
 - **WiFi支持**：自动连接预设WiFi网络
@@ -114,7 +130,7 @@
 | B | 录像功能 | TASK_FUNCTION_B | 1 | 4096 |
 | C | 回放功能 | TASK_FUNCTION_C | 1 | 4096 |
 | D | 拍照参数设置功能 | TASK_FUNCTION_D | 1 | 1024 |
-| E | 预留功能 | TASK_FUNCTION_E | 1 | 8192 |
+| E | USB/WiFi文件传输功能 | TASK_FUNCTION_E | 1 | 8192 |
 | F | 系统设置子菜单（含OTA） | TASK_SYSTEM_SETTINGS | 1 | 4096 |
 | - | 后台校时任务 | TASK_TIME_SYNC | 1 | 2048 |
 | - | 音频处理任务 | TASK_AUDIO_PROCESSING | 4 | 2048 |
@@ -193,7 +209,7 @@
 - **电源管理**：支持SD卡休眠模式，降低功耗
 
 ### 时钟同步机制
-- **DS1307硬件时钟**：使用DS1307实时时钟模块提供本地时间
+- **DS3231硬件时钟**：使用DS3231实时时钟模块提供本地时间
 - **NTP网络校时**：自动连接国内NTP服务器进行时间同步
 - **多服务器选择**：内置9个国内NTP服务器，提高同步成功率
 - **时间戳应用**：使用精确时间戳命名照片和记录日志
@@ -261,15 +277,16 @@
 - 旋转旋钮返回主菜单
 
 ### 位置B：录像功能
-- 录制720P分辨率视频（MJPEG编码）
-- 16kHz单声道音频同步录制
+- 录制720P分辨率视频（MJPEG编码，15fps）
+- 16kHz单声道音频同步录制（INMP441 I2S麦克风）
 - AVI格式保存到SD卡
 - 按压开关开始/停止录制
 - 旋转旋钮返回主菜单
 
 ### 位置C：回放功能
 - 从SD卡读取并显示JPG图片
-- 支持MJPEG AVI视频播放
+- 支持MJPEG AVI视频播放（带PCM音频解码）
+- MAX98357A音频输出，16kHz立体声
 - 四格布局显示文件列表
 - 旋转旋钮控制文件切换
 - 按压开关进入播放或返回
@@ -303,21 +320,20 @@
   - RGB565字节转换：确保色彩正确显示
   - ISP硬件控制：直接调用相机ISP接口调整参数
 
-### 位置E：传输文件- 预留待扩展
-- 从SD卡读取照片或视频文件
-- 开发板建立服务器
-- 支持通过WIFI从服务器下载照片、视频文件
+### 位置E：传输文件- USB MSC / WiFi文件服务器
+- USB大容量存储模式：开发板模拟U盘，通过USB连接电脑直接传输SD卡文件
+- WiFi文件服务器：开发板建立HTTP服务器，支持通过WiFi下载照片、视频文件
 
 ### 位置F：系统设置子菜单
 - 进入系统设置子菜单
 - 调整系统参数
-- 校准DS1307时钟
+- 校准DS3231时钟
 - 查看系统信息
 
 ## 系统设置子菜单功能详解
 
 ### 位置A：校对时间
-- 校准DS1307实时时钟
+- 校准DS3231实时时钟
 - 输入正确的日期和时间
 - 系统将自动设置时间
 
@@ -350,9 +366,9 @@
 
 ### 位置E：版本信息
 - 显示系统版本信息对话框（居中于横屏屏幕）
-- **项目迭代版本**：来自 `SYSTEM_VERSION_STRING` 宏定义（如 `V1.38`）
-- **固件版本**：`v4.0.9`（Arduino SDK版本）
-- **编译日期**：自动从 `__DATE__` 格式化显示（如 `2025-04-09`）
+- **项目迭代版本**：来自 `SYSTEM_VERSION_STRING` 宏定义（如 `V1.111`）
+- **固件版本**：`v4.0.9-build20250528`（Arduino SDK版本）
+- **编译日期**：自动从 `__DATE__` 格式化显示（如 `2026-05-05`）
 - **摄像头型号**：`GC2053`
 - **开发板型号**：`AMB82-MINI`
 - 4秒后自动返回子菜单
@@ -368,10 +384,12 @@ Camera/
 ├── Camera.ino                # 主程序入口
 ├── README.md                 # 项目说明文档
 ├── Bug.md                    # Bug记录文档
-├── VIDE.md                   # ArduinoIDE串口监视器日志记录文档
-├── Memory.md                 # 每次修复Bug的解决问题记录文档
-├── Shared_GlobalDefines.h    # 全局定义
-├── Shared_SharedResources.h  # 共享资源
+├── VLC.md                    # VLC播放器串口日志
+├── Font.md                   # 字库说明文档
+├── Memory.md                 # Bug修复迭代记录文档
+├── Shared_GlobalDefines.h    # 全局定义(版本号/引脚/音频常量)
+├── Shared_SharedResources.cpp # 共享资源实现
+├── Shared_SharedResources.h  # 共享资源头文件
 ├── Shared_Types.h            # 共享数据类型
 ├── Menu_MenuContext.cpp      # 菜单上下文管理
 ├── Menu_MenuContext.h        # 菜单上下文头文件
@@ -385,6 +403,8 @@ Camera/
 ├── Menu_TriangleController.h    # 三角形光标头文件
 ├── Menu_MM.h                 # 菜单管理宏定义
 ├── Menu_SM.h                 # 菜单状态宏定义
+├── Menu_ParamSettings.cpp    # 参数设置实现
+├── Menu_ParamSettings.h      # 参数设置头文件
 ├── Display_AmebaST7789_DMA_SPI1.cpp  # DMA SPI显示驱动
 ├── Display_AmebaST7789_DMA_SPI1.h    # DMA SPI显示头文件
 ├── Display_AmebaST7789_SPI1.cpp      # SPI显示驱动
@@ -399,7 +419,7 @@ Camera/
 ├── Display_TFTManager.h      # TFT显示管理器头文件
 ├── Display_font16x16.h       # 16x16点阵字库
 ├── font5x7.h                 # 5x7点阵字库
-├── Encoder_Control.cpp       # 编码器控制
+├── Encoder_Control.cpp       # 编码器控制(中断+消抖)
 ├── Encoder_Control.h         # 编码器控制头文件
 ├── RTOS_TaskFactory.cpp      # 任务工厂
 ├── RTOS_TaskFactory.h        # 任务工厂头文件
@@ -412,8 +432,27 @@ Camera/
 ├── Camera_ImageConfig.h      # 相机图像配置
 ├── Camera_SDCardManager.cpp  # SD卡管理器
 ├── Camera_SDCardManager.h    # SD卡管理器头文件
-├── DS1307_ClockModule.cpp    # DS1307时钟模块
-├── DS1307_ClockModule.h      # DS1307时钟模块头文件
+├── ISP_ConfigManager.cpp     # ISP配置管理器
+├── ISP_ConfigManager.h       # ISP配置管理器头文件
+├── ISP_ConfigTask.cpp        # ISP配置任务
+├── ISP_ConfigTask.h          # ISP配置任务头文件
+├── ISP_ConfigUI.cpp          # ISP配置UI
+├── ISP_ConfigUI.h            # ISP配置UI头文件
+├── ISP_ConfigUI_Simple.h     # ISP配置简化UI
+├── VideoRecorder.cpp         # 视频录制/回放核心模块
+├── VideoRecorder.h           # 视频录制模块头文件
+├── MJPEG_Encoder.cpp         # MJPEG编解码器(编码+解码)
+├── MJPEG_Encoder.h           # MJPEG编解码器头文件
+├── Inmp441_MicrophoneManager.cpp  # INMP441麦克风管理器
+├── Inmp441_MicrophoneManager.h    # INMP441麦克风管理器头文件
+├── Max98357a_AudioPlayer.cpp      # MAX98357A音频播放管理器
+├── Max98357a_AudioPlayer.h        # MAX98357A音频播放管理器头文件
+├── AVSync_PlaybackManager.cpp     # 音视频同步播放管理器
+├── AVSync_PlaybackManager.h       # 音视频同步播放管理器头文件
+├── USB_MassStorageModule.cpp      # USB大容量存储模块
+├── USB_MassStorageModule.h        # USB大容量存储模块头文件
+├── DS3231_ClockModule.cpp    # DS3231时钟模块
+├── DS3231_ClockModule.h      # DS3231时钟模块头文件
 ├── System_ConfigManager.cpp  # 系统配置管理器
 ├── System_ConfigManager.h    # 系统配置管理器头文件
 ├── System_ResourceManager.cpp  # 系统资源管理器
@@ -426,20 +465,14 @@ Camera/
 ├── Utils_Logger.h            # 日志工具头文件
 ├── Utils_Timer.cpp           # 定时器工具
 ├── Utils_Timer.h             # 定时器工具头文件
-├── VideoRecorder.cpp         # 视频录制模块
-├── VideoRecorder.h           # 视频录制模块头文件
-├── MJPEG_Encoder.cpp         # MJPEG编码器
-├── MJPEG_Encoder.h           # MJPEG编码器头文件
-├── Inmp441_MicrophoneManager.cpp  # 麦克风管理器
-├── Inmp441_MicrophoneManager.h    # 麦克风管理器头文件
-├── OTA.cpp                        # OTA升级模块
-├── OTA.h                          # OTA升级头文件
-├── ota_drv.cpp                    # OTA驱动
-├── ota_drv.h                      # OTA驱动头文件
-├── WiFi_WiFiFileServer.cpp        # WiFi文件服务器
-├── WiFi_WiFiFileServer.h          # WiFi文件服务器头文件
-├── WiFi_WiFiConnector.cpp         # WiFi连接器（含BLE配网）
-└── WiFi_WiFiConnector.h           # WiFi连接器头文件
+├── OTA.cpp                   # OTA升级模块
+├── OTA.h                     # OTA升级头文件
+├── ota_drv.cpp               # OTA驱动
+├── ota_drv.h                 # OTA驱动头文件
+├── WiFi_WiFiFileServer.cpp   # WiFi文件服务器
+├── WiFi_WiFiFileServer.h     # WiFi文件服务器头文件
+├── WiFi_WiFiConnector.cpp    # WiFi连接器（含BLE配网）
+└── WiFi_WiFiConnector.h      # WiFi连接器头文件
 ```
 
 ## 编译和上传
@@ -473,11 +506,18 @@ Camera/
 - 检查文件是否完整未损坏
 - 确认视频编码为MJPEG格式
 
-### DS1307时钟错误
+### 音频播放无声音
+- 确认MAX98357A模块电源(3.3V独立稳压)和扬声器连接正确
+- 检查I2S1接口D14(SCK)/D15(DIN)/D17(WS)引脚连接
+- 确认INMP441已正确释放I2S1接口（录音停止后自动释放）
+- 检查扬声器是否匹配（8Ω, 0.5W-3W）
+- 检查100Ω限流电阻是否串联在OUT+/OUT-与扬声器之间
+
+### DS3231时钟错误
 - 检查I2C连接（SCL和SDA引脚）
-- 确认DS1307模块电源正常
+- 确认DS3231模块电源正常
 - 检查是否存在引脚冲突
-- 确认UPDATE_DS1307_TIME宏配置正确
+- 确认UPDATE_DS3231_TIME宏配置正确
 
 ### 编码器无响应
 - 检查编码器与开发板的连接
@@ -485,6 +525,40 @@ Camera/
 - 检查ENCODER_CLK、ENCODER_DT、ENCODER_SW引脚配置
 
 ## 版本历史
+
+### V1.111 (2026-05-05)
+- **MAX98357A音频播放功能**：
+  - 新增MAX98357A I2S功放模块驱动，支持视频回放音频输出
+  - 16kHz/16bit立体声输出，与INMP441分时复用I2S1接口(D14/D15/D17)
+  - DMA双缓冲机制：4页×1280字节DMA页缓冲+65536 samples软件环缓冲
+  - 淡入淡出控制，DC偏移消除，欠载检测与统计
+  - TX回调中实时监控缓冲水位与欠载率
+- **视频回放音频预加载**：
+  - 播放前预填64个音频块(32768 samples)到环缓冲区
+  - resetSequentialMode()机制确保音频连续不重复
+  - 帧缓冲区回放模式：320x180帧缓冲+DMA一次性传输
+  - 逐帧处理+break架构，每帧仅处理一个视频块后返回RTOS调度
+- **音视频同步管理**：
+  - 新增AVSync_PlaybackManager模块，管理音视频同步播放
+  - 支持音频主/视频主/外部同步三种同步模式
+  - 播放状态机：停止/播放中/暂停/缓冲中
+- **ISP参数配置模块化**：
+  - 新增ISP_ConfigManager/Task/UI模块，实现ISP参数独立管理
+  - 简化UI头文件(ISP_ConfigUI_Simple.h)提供通用UI组件
+  - 参数持久化存储到SD卡配置文件(ISPControl.ini)
+- **USB大容量存储**：
+  - 新增USB_MassStorageModule模块，开发板模拟U盘
+  - 支持通过USB连接电脑直接传输SD卡文件
+- **视频录制优化**：
+  - 录制帧率从30fps优化为15fps，提升编码稳定性
+  - 双通道(录制+预览)协作架构
+  - 预览帧缓冲区模式消除横条纹干扰
+- **菜单参数设置模块**：
+  - 新增Menu_ParamSettings模块，统一的参数管理接口
+- **Bug修复**：
+  - 视频回放开头声音重复问题修复（V1.109）
+  - 视频回放帧率修复（V1.110/V1.111）
+  - 预加载与正式播放过渡掉帧修复
 
 ### V1.38 (2026-04-15)
 - **BLE WiFi配网功能**：
@@ -649,7 +723,7 @@ Camera/
 - **系统稳定性提升**：添加全面的错误处理和超时机制
 
 ### V1.1.0 (2026-01-07)
-- **时钟模块集成**：集成DS1307实时时钟模块
+- **时钟模块集成**：集成DS3231实时时钟模块
 - **通信驱动实现**：实现硬件I2C通信驱动
 - **超时保护机制**：添加时钟超时机制防止程序阻塞
 - **时钟保护功能**：支持固件刷写时保护时钟设置

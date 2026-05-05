@@ -976,35 +976,55 @@ void taskVideoFrameCapture(void* params) {
     const unsigned long FRAME_INTERVAL = 67;
     unsigned long lastFrameTime = 0;
     uint32_t frameCount = 0;
-    
+    uint32_t attemptCount = 0;
+    uint32_t imgLenZeroCount = 0;
+    uint32_t addVideoFrameFailCount = 0;
+
     while (1) {
         if (g_recorderState != REC_RECORDING) {
+            if (attemptCount > 0) {
+                Utils_Logger::info("视频帧录制结束统计: 总尝试=%d, 成功获取=%d, imgLen空=%d, addVideoFrame失败=%d",
+                    attemptCount, frameCount, imgLenZeroCount, addVideoFrameFailCount);
+            }
             vTaskDelay(10 / portTICK_PERIOD_MS);
             lastFrameTime = 0;
             frameCount = 0;
+            attemptCount = 0;
+            imgLenZeroCount = 0;
+            addVideoFrameFailCount = 0;
             continue;
         }
-        
+
         unsigned long currentTime = millis();
-        
+
         if (currentTime - lastFrameTime >= FRAME_INTERVAL) {
             uint32_t imgAddr;
             uint32_t imgLen;
-            
+
+            attemptCount++;
             Camera.getImage(VIDEO_CHANNEL_RECORD, &imgAddr, &imgLen);
-            
+
             lastFrameTime = currentTime;
-            
+
             if (imgLen > 0) {
-                mjpegEncoder.addVideoFrame((uint8_t*)imgAddr, imgLen, currentTime);
-                frameCount++;
-                
-                if (frameCount % 15 == 0) {
-                    Utils_Logger::info("视频帧获取: %d 帧", frameCount);
+                if (!mjpegEncoder.addVideoFrame((uint8_t*)imgAddr, imgLen, currentTime)) {
+                    addVideoFrameFailCount++;
+                    if (addVideoFrameFailCount <= 5) {
+                        Utils_Logger::warn("addVideoFrame failed, failCount=%d", addVideoFrameFailCount);
+                    }
+                } else {
+                    frameCount++;
                 }
+            } else {
+                imgLenZeroCount++;
+            }
+
+            if (frameCount % 30 == 0 && frameCount > 0) {
+                Utils_Logger::info("视频帧统计: 已获取=%d, imgLen空=%d/%d, addVideoFrame失败=%d",
+                    frameCount, imgLenZeroCount, attemptCount, addVideoFrameFailCount);
             }
         }
-        
+
         vTaskDelay(1 / portTICK_PERIOD_MS);
     }
     

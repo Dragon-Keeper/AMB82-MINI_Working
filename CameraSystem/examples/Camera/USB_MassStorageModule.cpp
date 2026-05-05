@@ -3,6 +3,7 @@
  */
 
 #include "USB_MassStorageModule.h"
+#include "Camera_SDCardManager.h"
 
 static const uint8_t strUsdBack[]    = {FONT16_IDX_FAN2, FONT16_IDX_HUI2, 0};
 static const uint8_t strUsdConfirm[] = {FONT16_IDX_QUE2, FONT16_IDX_REN2, 0};
@@ -154,6 +155,15 @@ void USB_MassStorageModule::exit() {
     delay(1000);
 
     Utils_Logger::info("[USB_MSD_MODULE] WiFi硬件已重新启动");
+
+    extern SDCardManager sdCardManager;
+    sdCardManager.cleanup();
+    delay(200);
+    if (!sdCardManager.init()) {
+        Utils_Logger::error("[USB_MSD_MODULE] SD card re-initialization failed after USB MSC exit");
+    } else {
+        Utils_Logger::info("[USB_MSD_MODULE] SD card re-initialized successfully after USB MSC exit");
+    }
 
     m_tftManager->setCursor(30, 120);
     // m_tftManager->print("[4/4] Done!");
